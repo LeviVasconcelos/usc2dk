@@ -1,0 +1,193 @@
+datasets:
+  loader:
+    workers: 24
+    batch_size: 4
+  unaligned_h36m:
+    subjects_data: [5,6]
+    subjects_gt: [0,1,2]
+    rgb: True
+    nImages: 2000
+    nViews: 4 
+    batch_size: 4         
+    img_size: 128
+    workers: 24 
+    ref_interval: [40,80]
+  h36m_source_gt:
+    subjects: [3,4]
+  h36m_source:
+    subjects: [0,1,2]
+    rgb: True
+    nImages: 800
+    nViews: 4
+    batch_size: 4 
+    img_size: 128
+    workers: 32 
+    process_batch: True
+  h36m_target:
+    subjects: [5,6]
+    rgb: True
+    nImages: 1000
+    nViews: 4
+    batch_size: 4 
+    img_size: 128
+    workers: 32
+    process_batch: True
+  h36m_target_ds:
+    subjects: [5,6]
+    rgb: True
+  h36m_resized_crop_protocol2_train:
+    subjects: [0,1,2,3,4]
+    rgb: True
+    nImages: 10000
+    nViews: 4
+    batch_size: 4 
+    img_size: 128
+    workers: 12 
+    process_batch: True
+    root_dir: '/data/levi/workspace/h36m-fetch/video_processed_resized_crop' 
+    kp_list: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+  h36m_resized_crop_protocol2_target:
+    subjects: [5,6]
+    rgb: True
+    nImages: 10000
+    nViews: 4
+    batch_size: 4 
+    img_size: 128
+    workers: 12 
+    process_batch: True
+    root_dir: '/data/levi/workspace/h36m-fetch/video_processed_resized_crop' 
+    kp_list: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+  penn_train:
+    root_dir: '/data/levi/dataset/PennAction/PennAction_128'
+    train: True
+    batch_size: 16
+    workers: 12 
+  penn_test:
+    root_dir: '/data/levi/dataset/PennAction/PennAction_128'
+    train: False 
+    batch_size: 16
+    workers: 12 
+  lsp_train:
+    root_dir: '/data/levi/dataset/lsp_128'
+    train: True
+    batch_size: 16
+    workers: 12 
+  lsp_test:
+    root_dir: '/data/levi/dataset/lsp_128'
+    train: False 
+    batch_size: 16
+    workers: 12 
+  mpii_train:
+    root_dir: '/data/levi/dataset/mpii_128'
+    train: True 
+    batch_size: 16
+    workers: 12 
+  mpii_eval:
+    root_dir: '/data/levi/dataset/mpii_128_eval'
+    train: False 
+    batch_size: 16
+    workers: 12 
+
+
+
+
+train_params:
+  detach_kp_generator: False
+  detach_kp_discriminator: False 
+  num_epochs: 500 
+  epoch_milestones: [400]
+  lr: 2.0e-4
+  batch_size: 32
+  clip_grad_norm: True
+  max_grad_norm: 1.0
+  detach_discriminator: False 
+  loss_weights:
+    discriminator_gan: 1 
+    perceptual: [10, 10, 10, 10, 10] #[5, 5, 5, 5, 5] #[10, 10, 10, 10, 10]  
+    reconstruction: 0 #[10, 10, 10, 10, 1]
+    generator_gan: 1
+    geometric: 5
+    generator_gan_features: 1
+    discriminator_gan_features: 1
+  log_params:
+    log_freq_iter: 200
+    cpk_freq_epoch: 50
+    log_imgs: [50, 100, 200, 300]
+    eval_frequency: 200
+  betas: !!python/tuple [0.5, 0.999]
+
+model_params:
+  align_feature_layers: [10]
+  arch_channels: [3, 64, 128, 256, 512, 1024, 512, 256, 128, 64, 32]  
+  conditional_generator_params:
+    in_features: 3 
+    channels: 32 
+    expansion: 2
+    decoder_out: 256
+    decoder_out_dim: 3
+  discriminator_params:
+    num_channels: 1 
+    num_kp: 13 #15
+    kp_variance: 0.01
+    block_expansion: 32
+    num_blocks: 4
+    max_features: 512
+    spectral_norm: True
+  img_discriminator_params:
+    num_channels: 3 
+    num_kp: 13 #15
+    kp_variance: 0.01
+    block_expansion: 32
+    num_blocks: 4
+    max_features: 512
+    spectral_norm: True
+  ITS_params:
+    encoder_in_features: 3
+    encoder_channels: 32
+    decoder_channels: 256
+    decoder_out_dim: 1
+    expansion: 2
+    use_sigmoid: True 
+  STK_params:
+    channels: 32
+    n_kp: 13 #15
+    kp_dim: 2
+    expansion: 2
+    bias: True
+  KTS_params:
+    target_shape: 128 
+    gamma: 800 
+    n_coords: 2 
+    n_kps: 14 #15 
+    edges: 'lsp' 
+    device: 'cuda'
+  KTS_loader_params:
+    target_shape: 128 
+    gamma: 800 
+    n_coords: 2 
+    n_kps: 14 #15 
+    edges: 'lsp' 
+    device: 'cuda'
+  kp_detector_params:
+    temperature: 0.1
+    block_expansion: 32
+    max_features: 1024
+    num_blocks: 5
+    scale_factor: 1 
+    num_kp: 32 
+    num_channels: 3
+  generator_params:
+    encoder_in_features: 3
+    encoder_channels: 32
+    decoder_channels: 256
+    decoder_out_dim: 3
+    expansion: 2
+    use_sigmoid: True 
+ 
+  masks:
+    masked: True
+    gammas: [0,0,0,0,0,0,0,0,0,0, 500]
+    #gammas: [0.001,0.005,0.01,0.05,0.1,0.5,1.,5.,10.,50.,100.]        
+adaptation_loss_params:
+  proto_extractor: 'kps' #options are 'kps' and 'bones'
+  loss_type: 'matching' #options are 'distance', 'triplet', 'matching'
