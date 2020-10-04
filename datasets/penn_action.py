@@ -53,7 +53,7 @@ class PennAction(data.Dataset):
         self.labels = dict()
         self.frame_dir = os.path.join(self.root_dir, "frames")
         self.label_dir = os.path.join(self.root_dir, "labels")
-        self.max_samples = 4000
+        self.max_samples = 400000
         self.load_annotations()
         self.make_dataset()
         self.samples = self.samples[:self.max_samples]

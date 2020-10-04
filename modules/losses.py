@@ -4,6 +4,10 @@ def mean_batch(val):
     mean = val.view(val.shape[0], -1).mean(-1)
     return  mean
 
+def sum_batch(val):
+    sum_b = val.view(val.shape[0], -1).sum(-1)
+    return sum_b
+
 def masked_l2_loss(prediction, target, mask=None):
     diff = torch.pow(prediction - target, 2)
     if mask is not None:
@@ -28,7 +32,8 @@ def l2_loss(prediction, target, weight=1):
 def l1_loss(prediction, target, weight=1):
     if weight == 0:
         return 0
-    return weight * mean_batch(torch.abs(prediction - target))
+    return weight * sum_batch(torch.abs(prediction - target))
+    #return weight * mean_batch(torch.abs(prediction - target))
 
 
 

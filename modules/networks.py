@@ -452,7 +452,7 @@ class Discriminator2D(nn.Module):
         return out
 
 class MultiScaleDiscriminator(nn.Module):
-    def __init__(self, disc_params, scales=[1, 0.5, 0.25]):
+    def __init__(self, disc_params, scales=[1]):
         super(MultiScaleDiscriminator, self).__init__()
         models = []
         for x in scales:

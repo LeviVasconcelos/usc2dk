@@ -56,11 +56,11 @@ def LoadHumansDataset(subjects, rgb, nImages, nViews, root_dir, kp_list,  batch_
     if process_batch:
         return torch.utils.data.DataLoader(h36m, batch_size=batch_size, 
                                      shuffle=True, num_workers=workers, 
-                                     pin_memory=False, collate_fn=batch_fn)
+                                     pin_memory=False, collate_fn=batch_fn, drop_last=True)
     else:
         return torch.utils.data.DataLoader(h36m, batch_size=batch_size, 
                                               shuffle=True, num_workers=workers, 
-                                              pin_memory=False)
+                                              pin_memory=False, drop_last=True)
 
 def _draw_annot_from_file(img, bbox, pose):
       img2 = cv2.imread(img)
