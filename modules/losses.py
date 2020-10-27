@@ -8,8 +8,26 @@ def sum_batch(val):
     sum_b = val.view(val.shape[0], -1).sum(-1)
     return sum_b
 
+def masked_l2_heatmap_loss(prediction, target, mask=None):
+    diff = l2_loss(prediction,target)
+    if mask is not None:
+        if (mask != mask).sum() > 0:
+            print('NaN on mask!!')
+            raise ValueError
+        img_mask = torch.ones(diff.shape)
+        diff = diff * mask.unsqueeze(-1)
+        division = mask.sum(1).unsqueeze(-1)
+        if (division == 0).sum() > 0:
+            print('division by Zero!')
+            raise ValueError
+        diff = (diff / division)
+        diff = diff.view(diff.shape[0], -1).sum(-1)
+        return diff
+    return mean_batch(diff)
+
+
 def masked_l2_loss(prediction, target, mask=None):
-    diff = torch.pow(prediction - target, 2)
+    diff = l2_loss(prediction,  target)
     if mask is not None:
         if (mask != mask).sum() > 0:
             print('NaN on mask!!')
