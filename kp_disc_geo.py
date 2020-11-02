@@ -27,7 +27,7 @@ from modules.vgg19 import Vgg19
 from datasets.annot_converter import HUMANS_TO_PENN, HUMANS_TO_LSP
 from sync_batchnorm import DataParallelWithCallback
 from logger import Visualizer
-from evaluation import evaluate
+from evaluation import evaluate  
 
 rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
 resource.setrlimit(resource.RLIMIT_NOFILE, (2048, rlimit[1]))
@@ -38,6 +38,55 @@ def geo_transform(x, d):
 
 def geo_transform_inverse(x, d):
     return batch_image_rotation(x, d)
+
+class Buffer():
+    def __init__(self, buff_dim=1000):
+        self.buff_dim = buff_dim
+        self.sampling_dim = None
+        self.buffer_no_rot = torch.Tensor([]).cuda()
+        self.buffer_rot = torch.Tensor([]).cuda()
+    
+    def put_hm(self, buffer, hm):
+        # randomly select half of the samples from the heatmaps
+        if self.sampling_dim is None:
+            self.sampling_dim =int(hm.shape[0]/2)
+            print(f"sampling dim setted at {self.sampling_dim}")
+        random_samples = list(range(0,int(hm.shape[0]/2))) 
+        random.shuffle(random_samples)
+        random_samples = random_samples[:int(hm.shape[0]/2)]
+        hm = hm[random_samples]
+        
+        if buffer.shape[0]+hm.shape[0] <= self.buff_dim:
+            buffer = torch.cat((buffer,hm),0)
+        else:
+            # compute the overflow if the new hm are added 
+            overflow = buffer.shape[0]+hm.shape[0] - self.buff_dim
+            # sample randomly the right amount of sample to have the buffer always filled
+            random_samples = list(range(0,buffer.shape[0])) 
+            random.shuffle(random_samples)
+            random_samples = random_samples[:(buffer.shape[0]-overflow)]
+            # remove some randome elemnts
+            buffer = buffer[random_samples]
+            # sample from it
+            buffer = torch.cat((buffer,hm),0)
+        return buffer 
+
+    def put_no_rot(self, no_rot_hm):
+        self.buffer_no_rot = self.put_hm(self.buffer_no_rot,no_rot_hm)
+    def put_rot(self, rot_hm):
+        self.buffer_rot = self.put_hm(self.buffer_rot,rot_hm)
+        
+    def get_samples(self, buffer):
+        random_samples = list(range(0,buffer.shape[0]))
+        random.shuffle(random_samples)
+        random_samples = random_samples[:self.sampling_dim]
+        return buffer[random_samples]
+    
+    def get_no_rot(self):
+        return self.get_samples(self.buffer_no_rot)
+    def get_rot(self):
+        return self.get_samples(self.buffer_rot)
+            
 
 
 class GeneratorTrainer(nn.Module):
@@ -86,7 +135,9 @@ class DiscriminatorTrainer(nn.Module):
         self.discriminators = discriminators
         self.train_params = train_params
 
-    def forward(self, gt_image, generated_image):
+    def forward(self, gt_image, generated_image, filter=None):
+        
+        #gt_image[""]
         gt_maps = self.discriminators(gt_image)
         generated_maps = self.discriminators(generated_image.detach())
         disc_loss = [] 
@@ -148,6 +199,7 @@ def train_generator_geo(model_generator,
 
     discriminatorModel = DiscriminatorTrainer(discriminator, train_params).cuda()
     discriminatorModel = DataParallelWithCallback(discriminatorModel, device_ids=device_ids)
+    buffer = Buffer()
     k = 0
     iterator_source = iter(loader_src)
     source_model = copy.deepcopy(model_generator)
@@ -174,8 +226,8 @@ def train_generator_geo(model_generator,
             tgt_gt_rot = batch_kp_rotation(tgt_gt, angle)
             geo_tgt_imgs = geo_transform(tgt_images, angle)
             
-            pred_tgt = img_generator(tgt_images, kp_map)
-            pred_rot_tgt = img_generator(geo_tgt_imgs, kp_map)
+            pred_tgt = img_generator(tgt_images, kp_map) 
+            pred_rot_tgt = img_generator(geo_tgt_imgs, kp_map) 
 
             geo_loss = geo_consistency(pred_tgt['heatmaps'], 
                                        pred_rot_tgt['heatmaps'],
@@ -192,10 +244,21 @@ def train_generator_geo(model_generator,
             optimizer_generator.zero_grad()
             optimizer_discriminator.zero_grad()
 
+            #### save new frame in the buuffer
+            buffer.put_no_rot(pred_tgt['heatmaps'].detach())
+            buffer.put_rot(pred_rot_tgt['heatmaps'].detach())
+            #### load frame from the buffer 
+            random_samples = list(range(0,pred_rot_tgt['heatmaps'].shape[0]))
+            random.shuffle(random_samples)
+            random_samples = random_samples[:buffer.sampling_dim]
+            gen_hm_no_rot = torch.cat((buffer.get_no_rot(),pred_tgt['heatmaps'][random_samples].detach()), 0)
+            gen_hm_rot = torch.cat((buffer.get_rot(),pred_rot_tgt['heatmaps'][random_samples].detach()), 0)
+
+
             discriminator_no_rot_out = discriminatorModel(gt_image=src_images,
-                                                           generated_image=pred_tgt['heatmaps'].detach())
+                                                           generated_image=gen_hm_no_rot)
             discriminator_rot_out = discriminatorModel(gt_image=geo_src_images, 
-                                                        generated_image=pred_rot_tgt['heatmaps'].detach())
+                                                        generated_image=gen_hm_rot)
 
             loss_disc = discriminator_no_rot_out['loss'].mean() + discriminator_rot_out['loss'].mean()
             loss_disc.backward()

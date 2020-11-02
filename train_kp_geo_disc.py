@@ -4,13 +4,14 @@ import yaml
 from time import gmtime, strftime
 from argparse import ArgumentParser
 from shutil import copy
+import torch
 
 #sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
 
 from modules.networks import KPToSkl, Discriminator2D
 from modules.networks import MultiScaleDiscriminator 
 from modules.networks import KPDetectorVerbose, KPDetector
-from modules.loss_utils import *
+#from modules.loss_utils import *
 
 from datasets.humans36m import LoadHumansDataset, batch_fn
 from datasets.penn_action import LoadPennAction, batch_penn
@@ -18,7 +19,7 @@ from datasets.mpii_loader import LoadMpii
 from datasets.couple_loader import LoadCoupledDatasets
 from datasets.unaligned_loader import LoadUnalignedH36m 
 from datasets.lsp import LoadLsp
-from datasets.annot_converter import HUMANS_TO_LSP, HUMANS_TO_MPII, HUMANS_TO_PENN
+from datasets.annot_converter import HUMANS_TO_LSP, HUMANS_TO_MPII, HUMANS_TO_PENN, MPII_TO_HUMANS
 
 from kp_disc_geo import train_generator_geo
 
@@ -69,13 +70,15 @@ if __name__ == "__main__":
     if not os.path.exists(os.path.join(log_dir, os.path.basename(opt.config))):
         copy(opt.config, log_dir)
 
-    logger = Logger(log_dir, save_frequency=50)
+    logger = Logger(log_dir, save_frequency=10)
 
     ##### Model instantiation
     model_kp_detector = KPDetector(**config['model_params']['kp_detector_params']) 
     model_kp_detector.to(opt.device_ids[0]) 
+
     if opt.src_model != 'scratch':
         try:
+            print(f"loading {opt.src_model}")
             kp_state_dict = torch.load(opt.src_model)
             print('Source model loaded: %s' % opt.src_model)
         except:
@@ -112,7 +115,7 @@ if __name__ == "__main__":
     elif opt.tgt == 'humans':
         loader_tgt = LoadHumansDataset(**config['datasets']['h36m_resized_simplified_train']) 
         loader_test = LoadHumansDataset(**config['datasets']['h36m_resized_simplified_test'])
-        kp_map = [0, 1, 2, 3, 6, 7, 8, 13, 14, 17, 18, 19, 25, 26, 27]
+        kp_map = MPII_TO_HUMANS #[0, 1, 2, 3, 6, 7, 8, 13, 14, 17, 18, 19, 25, 26, 27]
  
 
     train_generator_geo(model_kp_detector,

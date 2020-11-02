@@ -6,8 +6,11 @@ from argparse import ArgumentParser
 from shutil import copy
 import torch
 import json
+from PIL import Image, ImageDraw
+import matplotlib
 
-
+import pickle as pkl
+import numpy as np
 from tqdm import tqdm
 
 
@@ -23,7 +26,7 @@ from datasets.couple_loader import LoadCoupledDatasets
 from datasets.unaligned_loader import LoadUnalignedH36m 
 from datasets.lsp import LoadLsp
 from datasets.annot_converter import HUMANS_TO_LSP, HUMANS_TO_MPII, HUMANS_TO_PENN, MPII_TO_HUMANS
-
+from modules.util import kp2gaussian2
 from kp_disc_geo import train_generator_geo
 
 from tensor_logger import Logger
@@ -32,7 +35,9 @@ def evaluate(model, loader, dset='mpii', filter=None, device='cuda'):
     model.eval()
     pck_scores = list()
     scores = list()
+    concat_imgs = []
     count = 0.
+    k = 1
     with torch.no_grad():
         for batch in tqdm(loader):
             out = model(batch['imgs'].to(device))
@@ -49,6 +54,16 @@ def evaluate(model, loader, dset='mpii', filter=None, device='cuda'):
             scores.append(score)
             pck_scores.append(pck_score)
             count += batch['imgs'].shape[0]
+
+            #eval_out = eval_model(model, batch)
+            #print(f"annots {batch['annots'][k].shape}")
+            #print(f"kp {out['value'][k].shape}")
+            #print(f"img {batch['imgs'][k].shape}")
+            
+            concat_img = np.concatenate((draw_kp(tensor_to_image(batch['imgs'][k]),unnorm_kp(batch['annots'][k])),
+                                            draw_kp(tensor_to_image(batch['imgs'][k]), unnorm_kp(out['value'][k]), color='red')), axis=2)
+            concat_imgs.append(concat_img)
+
     mse = torch.Tensor(scores).sum()/count
     pck = torch.Tensor(pck_scores).mean()
     out = {
@@ -56,6 +71,41 @@ def evaluate(model, loader, dset='mpii', filter=None, device='cuda'):
             'PCK':pck.item(),
             }
     model.train()
+    return out, concat_imgs
+
+def eval_model(model, tgt_batch, heatmap_res=122):
+    model.eval()
+    images = tgt_batch['imgs']
+    annots = tgt_batch['annots']
+    gt_heatmaps = kp2gaussian2(annots, (heatmap_res, heatmap_res), 0.5)
+    mask = None if 'kp_mask' not in tgt_batch.keys() else tgt_batch['kp_mask']
+    out = None
+    with torch.no_grad():
+        out = model(images, gt_heatmaps, mask)
+        #out = model(images, annots, mask)
+    return out
+
+def draw_kp(img_, kps, color='blue'):
+    #print(img_.shape)
+    #print(kps.shape)
+    img = img_.transpose(1,2,0) if img_.shape[0] == 3 else img_
+    img = Image.fromarray(img)
+    kp_img = img.copy()
+    draw = ImageDraw.Draw(kp_img)
+    radius = 2
+    for kp in kps:
+        rect = [kp[0] - radius, kp[1] - radius, kp[0] + radius, kp[1] + radius]
+        draw.ellipse(rect, fill=color, outline=color)
+    return np.array(kp_img).transpose(2,0,1)
+
+def unnorm_kp(kps):
+    return (127./2.) * (kps + 1)
+
+def tensor_to_image(x):
+    out = x.clone().detach().cpu()
+    out = out.numpy()
+    #out = out if out.shape[0] == 3 else np.repeat(out, 3, axis=0)
+    out = (out * 255).astype(np.uint8)
     return out
 
 if __name__ == "__main__":
@@ -109,10 +159,12 @@ if __name__ == "__main__":
         kp_map = HUMANS_TO_LSP
     elif opt.tgt == 'humans':
         loader_test = LoadHumansDataset(**config['datasets']['h36m_resized_simplified_test'])
-        kp_map = MPII_TO_HUMANS
+        kp_map =  None #MPII_TO_HUMANS # #
         # kp_map = [0, 1, 2, 3, 6, 7, 8, 13, 14, 17, 18, 19, 25, 26, 27]
 
-    results = evaluate(model_kp_detector, loader_test, filter=kp_map,dset=opt.tgt)
+    results, imgs = evaluate(model_kp_detector, loader_test, filter=kp_map,dset=opt.tgt)
+    
+    pkl.dump(imgs, open(os.path.join(os.path.split(opt.src_model)[0],"img.pkl"), 'wb'))
     print(f" res : {results}")
 
     json.dump(results,open(os.path.join(os.path.split(opt.src_model)[0],"evaluation.json"), "w"),indent=2)
