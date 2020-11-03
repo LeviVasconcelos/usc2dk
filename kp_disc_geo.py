@@ -33,6 +33,12 @@ rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
 resource.setrlimit(resource.RLIMIT_NOFILE, (2048, rlimit[1]))
 COLORS = ['black', 'brown', 'royalblue','red','navy', 'orangered','blue', 'tomato', 'purple', 'darkorange', 'darkmagenta', 'darkgoldenrod' , 'cyan', 'yellow', 'white', 'lightgrey']
 
+def norm_tensor(x):
+    mx = torch.max(x)
+    mn = torch.min(x)
+    return (x - mn)/(mx - mn)
+
+
 def geo_transform(x, d):
     return batch_image_rotation(x, d)
 
@@ -166,7 +172,8 @@ def train_generator_geo(model_generator,
                        checkpoint,
                        logger, 
                        device_ids,
-                       kp_map=None):
+                       kp_map=None,
+                       kp_map_src=None):
     log_params = train_params['log_params']
     optimizer_generator = torch.optim.Adam(model_generator.parameters(),
                                             lr=train_params['lr'],
@@ -218,8 +225,14 @@ def train_generator_geo(model_generator,
 
             angle = random.randint(1,359)
             src_annots = src_batch['annots'].cuda()
-            src_images =  kp2gaussian2(src_annots, (122, 122), 0.5)[:, kp_map]
-            geo_src_images = kp2gaussian2(batch_kp_rotation(src_annots, angle), (122, 122), 0.5)[:, kp_map]
+            
+            if kp_map_src is not None:
+                src_annots = src_annots[:, kp_map_src]
+            kgauss_var = 0.15 #0.25
+            src_images =  kp2gaussian2(src_annots, (122, 122), kgauss_var).detach()
+            geo_src_images = kp2gaussian2(batch_kp_rotation(src_annots, angle), (122, 122), kgauss_var).detach()
+            #src_images = norm_tensor(src_images).detach()
+            #geo_src_images = norm_tensor(geo_src_images).detach()
 
             tgt_images = tgt_batch['imgs'].cuda()
             tgt_gt = tgt_batch['annots'].cuda()
@@ -235,7 +248,7 @@ def train_generator_geo(model_generator,
                                        geo_transform_inverse, angle)
 
             geo_term = geo_loss['t'] + geo_loss['t_inv']
-            generator_term = pred_tgt['generator_loss'] + pred_rot_tgt['generator_loss']
+            generator_term = pred_tgt['generator_loss'] + 0 * pred_rot_tgt['generator_loss']
             geo_weight = train_params['loss_weights']['geometric']
             loss = geo_weight * geo_term + (generator_term) 
             loss.backward()
@@ -256,16 +269,24 @@ def train_generator_geo(model_generator,
 
 
             discriminator_no_rot_out = discriminatorModel(gt_image=src_images,
-                                                           generated_image=gen_hm_no_rot)
+                                                           generated_image=pred_tgt['heatmaps'].detach())
             discriminator_rot_out = discriminatorModel(gt_image=geo_src_images, 
-                                                        generated_image=gen_hm_rot)
+                                                        generated_image=pred_rot_tgt['heatmaps'].detach())
 
-            loss_disc = discriminator_no_rot_out['loss'].mean() + discriminator_rot_out['loss'].mean()
+            loss_disc = discriminator_no_rot_out['loss'] + 0 * discriminator_rot_out['loss']
             loss_disc.backward()
 
             optimizer_discriminator.step()
             optimizer_discriminator.zero_grad()
             optimizer_generator.zero_grad()
+
+            #if loss_disc.item() < 5e-3:
+            #    print('gan collapsed, saving heatmaps')
+            #    heatmaps = {'gt': src_images,
+            #                'fake': pred_tgt['heatmaps']}
+            #    torch.save(heatmaps, 'heatmaps.pth')
+            #    break
+
 
             logger.add_scalar("Losses", 
                                loss.item(), 
@@ -274,7 +295,7 @@ def train_generator_geo(model_generator,
                                loss_disc.item(), 
                                logger.iterations)
             logger.add_scalar("Gen Loss", 
-                               pred_tgt['generator_loss'].item(), 
+                               generator_term.item(), 
                                logger.iterations)
             logger.add_scalar("Weighted Geo Loss",
                                (geo_weight * geo_term).item(),
@@ -310,9 +331,13 @@ def train_generator_geo(model_generator,
                 image = concat_img
                 heatmaps_img = np.concatenate((heatmap_img_0, heatmap_img_1), axis = 1)
                 src_heatmaps = np.concatenate((src_heatmap_0, src_heatmap_1), axis = 1)
-                logger.add_image('Pose', image, epoch)
-                logger.add_image('heatmaps', heatmaps_img, epoch)
-                logger.add_image('src heatmaps', src_heatmaps, epoch)
+                tgt_gt_img = draw_kp(tensor_to_image(tgt_batch['imgs'][k]), tgt_batch['annots'][k])
+                src_gt_img = draw_kp(tensor_to_image(src_batch['imgs'][k]), src_annots[k])
+                img_gt_kps = np.concatenate((src_gt_img, tgt_gt_img),axis=1)
+                logger.add_image('Pose', image, logger.iterations)
+                logger.add_image('heatmaps', heatmaps_img, logger.iterations)
+                logger.add_image('src heatmaps', src_heatmaps, logger.iterations)
+                logger.add_image('gt keypoints', img_gt_kps, logger.iterations)
                 k += 1
                 k = k % len(log_params['log_imgs']) 
 
@@ -339,11 +364,10 @@ def unnorm_kp(kps):
 
 def tensor_to_image(x, heatmap=False):
     out = x.clone().detach().cpu()
+    if heatmap:
+       out = norm_tensor(out)
     out = out.numpy()
     out = out if out.shape[0] == 3 else np.repeat(out, 3, axis=0)
-    if heatmap:
-        max_value = np.max(out)
-        out = out/max_value 
     out = (out * 255).astype(np.uint8)
     return out
 

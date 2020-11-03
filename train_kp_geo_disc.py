@@ -100,6 +100,7 @@ if __name__ == "__main__":
     ##### Dataset loading
     loader_src = LoadHumansDataset(**config['datasets']['h36m_resized_crop_protocol2_train'])
     config['train_params']['dataset'] = opt.tgt
+    kp_map_src = None #HUMANS_TO_MPII
     if opt.tgt == 'penn':
         loader_tgt = LoadPennAction(**config['datasets']['penn_train']) 
         loader_test = LoadPennAction(**config['datasets']['penn_test'])
@@ -125,4 +126,5 @@ if __name__ == "__main__":
                          loader_test,
                          config['train_params'],
                          opt.checkpoint,
-                         logger, opt.device_ids, kp_map)
+                         logger, opt.device_ids, 
+                         kp_map, kp_map_src)

@@ -61,6 +61,8 @@ class KPDetector(nn.Module):
 
         final_shape = prediction.shape
         heatmap = prediction.view(final_shape[0], final_shape[1], -1)
+        #heatmap = F.sigmoid(heatmap)
+        #heatmap = F.softmax(heatmap, dim=2)
         heatmap = F.softmax(heatmap / self.temperature, dim=2)
         heatmap = heatmap.view(*final_shape)
 
