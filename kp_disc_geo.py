@@ -149,6 +149,7 @@ def train_generator_geo(model_generator,
     discriminatorModel = DiscriminatorTrainer(discriminator, train_params).cuda()
     discriminatorModel = DataParallelWithCallback(discriminatorModel, device_ids=device_ids)
     k = 0
+    kpVariance = train_params['heatmap_var']
     iterator_source = iter(loader_src)
     source_model = copy.deepcopy(model_generator)
     for epoch in range(logger.epoch, train_params['num_epochs']):
@@ -166,8 +167,8 @@ def train_generator_geo(model_generator,
 
             angle = random.randint(1,359)
             src_annots = src_batch['annots'].cuda()
-            src_images =  kp2gaussian2(src_annots, (122, 122), 0.5)[:, kp_map]
-            geo_src_images = kp2gaussian2(batch_kp_rotation(src_annots, angle), (122, 122), 0.5)[:, kp_map]
+            src_images =  kp2gaussian2(src_annots, (122, 122), kpVariance).detach()
+            geo_src_images = kp2gaussian2(batch_kp_rotation(src_annots, angle), (122, 122), kpVariance).detach()
 
             tgt_images = tgt_batch['imgs'].cuda()
             tgt_gt = tgt_batch['annots'].cuda()
@@ -183,7 +184,7 @@ def train_generator_geo(model_generator,
                                        geo_transform_inverse, angle)
 
             geo_term = geo_loss['t'] + geo_loss['t_inv']
-            generator_term = pred_tgt['generator_loss'] + pred_rot_tgt['generator_loss']
+            generator_term = pred_tgt['generator_loss'] + 0 * pred_rot_tgt['generator_loss']
             geo_weight = train_params['loss_weights']['geometric']
             loss = geo_weight * geo_term + (generator_term) 
             loss.backward()
@@ -197,7 +198,7 @@ def train_generator_geo(model_generator,
             discriminator_rot_out = discriminatorModel(gt_image=geo_src_images, 
                                                         generated_image=pred_rot_tgt['heatmaps'].detach())
 
-            loss_disc = discriminator_no_rot_out['loss'].mean() + discriminator_rot_out['loss'].mean()
+            loss_disc = discriminator_no_rot_out['loss'].mean() + 0 * discriminator_rot_out['loss'].mean()
             loss_disc.backward()
 
             optimizer_discriminator.step()

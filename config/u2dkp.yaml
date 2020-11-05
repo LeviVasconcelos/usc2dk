@@ -124,6 +124,7 @@ train_params:
   max_grad_norm: 1.0
   detach_discriminator: False 
   inpaint: 'NONE'
+  heatmap_var: 0.15
   loss_weights:
     discriminator_gan: 1
     perceptual: [10, 10, 10, 10, 10] #[10, 10, 10, 10, 10]  

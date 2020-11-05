@@ -10,7 +10,6 @@ from shutil import copy
 from modules.networks import KPToSkl, Discriminator2D
 from modules.networks import MultiScaleDiscriminator 
 from modules.networks import KPDetectorVerbose, KPDetector
-from modules.loss_utils import *
 
 from datasets.humans36m import LoadHumansDataset, batch_fn
 from datasets.penn_action import LoadPennAction, batch_penn

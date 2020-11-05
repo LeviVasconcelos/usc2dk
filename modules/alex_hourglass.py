@@ -135,7 +135,8 @@ class UpBlock2d(nn.Module):
         out = F.interpolate(x, scale_factor=2)
         out = self.conv(out)
         out = self.norm(out)
-        out = F.relu(out)
+        out = F.leaky_relu(out)
+        #out = F.relu(out)
         return out
 
 
@@ -154,7 +155,8 @@ class DownBlock2d(nn.Module):
     def forward(self, x):
         out = self.conv(x)
         out = self.norm(out)
-        out = F.relu(out)
+        out = F.leaky_relu(out)
+        #out = F.relu(out)
         out = self.pool(out)
         return out
 
