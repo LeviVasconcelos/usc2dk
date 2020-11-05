@@ -29,20 +29,21 @@ class KPDetectorTrainer(nn.Module):
         #loss = masked_l2_loss(keypoints, ground_truth, mask)
         gt = ground_truth if kp_map is None else ground_truth[:, kp_map]
         #loss = masked_l2_loss(dict_out['heatmaps'], gt, mask)
-        loss = masked_l2_heatmap_loss(dict_out['heatmaps'], gt, mask)
+        loss = masked_l2_heatmap_loss(dict_out['heatmaps'], gt.detach(), mask)
         kps = unnorm_kp(dict_out['value'])
         #print('heatmap size: ', dict_out['heatmaps'].shape)
         #print('kp out: ', dict_out['value'])
         #print('unnorm kps: ', unnorm_kp(dict_out['value']))
         return {"keypoints": kps,
+                "heatmaps": dict_out['heatmaps'],
                 "l2_loss": loss.mean(),
                 }
         
-def eval_model(model, tgt_batch, heatmap_res=122):
+def eval_model(model, tgt_batch, heatmap_res=122, hm_var=0.15):
     model.eval()
     images = tgt_batch['imgs']
     annots = tgt_batch['annots']
-    gt_heatmaps = kp2gaussian2(annots, (heatmap_res, heatmap_res), 0.5)
+    gt_heatmaps = kp2gaussian2(annots, (heatmap_res, heatmap_res), hm_var).detach()
     mask = None if 'kp_mask' not in tgt_batch.keys() else tgt_batch['kp_mask']
     out = None
     with torch.no_grad():
@@ -93,6 +94,8 @@ def train_kpdetector(model_kp_detector,
         print(' MSE: ' + str(results['MSE']) + ' PCK: ' + str(results['PCK'])) 
         return
 
+    heatmap_var = train_params['heatmap_var']
+
     for epoch in range(logger.epoch, train_params['num_epochs']):
         results = evaluate(model_kp_detector, loader_tgt, dset=train_params['dataset'])
         results_train = evaluate(model_kp_detector, loader, dset=train_params['dataset']) 
@@ -109,7 +112,7 @@ def train_kpdetector(model_kp_detector,
                 break
             annots = batch['annots'] 
             gt_heatmaps = kp2gaussian2(annots, (model_kp_detector.heatmap_res, 
-                                                model_kp_detector.heatmap_res), 0.5) 
+                                                model_kp_detector.heatmap_res), heatmap_var).detach() 
             if (annots != annots).sum() > 0 or (annots.abs() == float("Inf")).sum() > 0:
                 print('Annotation with NaN')
                 break
@@ -126,15 +129,24 @@ def train_kpdetector(model_kp_detector,
             ####### LOG VALIDATION
             if i % log_params['eval_frequency'] == 0:
                 tgt_batch = next(iter(loader_tgt))
-                eval_out = eval_model(kp_detector, tgt_batch, model_kp_detector.heatmap_res)
+                eval_out = eval_model(kp_detector, tgt_batch, model_kp_detector.heatmap_res, heatmap_var)
                 eval_sz = int(len(loader)/log_params['eval_frequency'])
                 it_number = epoch * eval_sz  + (logger.iterations/log_params['eval_frequency'])
                 logger.add_scalar('Eval loss', eval_out['l2_loss'].mean(), it_number)
                 concat_img = np.concatenate((draw_kp(tensor_to_image(tgt_batch['imgs'][k]),unnorm_kp(tgt_batch['annots'][k])),
                                             draw_kp(tensor_to_image(tgt_batch['imgs'][k]), eval_out['keypoints'][k], color='red')), axis=2)
- 
-                logger.add_image('Eval_', concat_img, epoch)
 
+                heatmap_img_0 = tensor_to_image(kp_detector_out['heatmaps'][k, 0].unsqueeze(0), True)
+                heatmap_img_1 = tensor_to_image(kp_detector_out['heatmaps'][k, 5].unsqueeze(0), True)
+                src_heatmap_0 = tensor_to_image(gt_heatmaps[k, 0].unsqueeze(0), True)
+                src_heatmap_1 = tensor_to_image(gt_heatmaps[k, 5].unsqueeze(0), True)
+                heatmaps_img = np.concatenate((heatmap_img_0, heatmap_img_1), axis = 2)
+                src_heatmaps = np.concatenate((src_heatmap_0, src_heatmap_1), axis = 2)
+ 
+                logger.add_image('Eval_', concat_img, logger.iterations)
+                logger.add_image('heatmaps', heatmaps_img, logger.iterations)
+                logger.add_image('src heatmaps', src_heatmaps, logger.iterations)
+ 
             ####### LOG
             logger.add_scalar('L2 loss', 
                                loss.item(), 
@@ -143,7 +155,7 @@ def train_kpdetector(model_kp_detector,
                 concat_img_train = np.concatenate((draw_kp(tensor_to_image(images[k]), unnorm_kp(annots[k])),
                                                   draw_kp(tensor_to_image(images[k]), kp_detector_out['keypoints'][k], color='red')), axis=2)
  
-                logger.add_image('Train_{%d}' % i, concat_img_train, epoch)
+                logger.add_image('Train_{%d}' % i, concat_img_train, logger.iterations)
                 k += 1
                 k = k % len(log_params['log_imgs']) 
             logger.step_it()
@@ -167,10 +179,14 @@ def draw_kp(img_, kps, color='blue'):
 def unnorm_kp(kps):
     return (127./2.) * (kps + 1)
 
-def tensor_to_image(x):
+def tensor_to_image(x, should_normalize=False):
     out = x.clone().detach().cpu()
     out = out.numpy()
     out = out if out.shape[0] == 3 else np.repeat(out, 3, axis=0)
+    if should_normalize:
+        max_value = np.max(out)
+        min_value = np.min(out)
+        out = (out - min_value) / (max_value - min_value)
     out = (out * 255).astype(np.uint8)
     return out
 

@@ -4,6 +4,7 @@ import yaml
 from time import gmtime, strftime
 from argparse import ArgumentParser
 from shutil import copy
+import torch
 
 #sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
 
@@ -17,7 +18,8 @@ from datasets.mpii_loader import LoadMpii
 from datasets.couple_loader import LoadCoupledDatasets
 from datasets.unaligned_loader import LoadUnalignedH36m 
 from datasets.lsp import LoadLsp
-from datasets.annot_converter import HUMANS_TO_LSP, HUMANS_TO_MPII, HUMANS_TO_PENN
+from datasets.annot_converter import HUMANS_TO_LSP, HUMANS_TO_MPII 
+from datasets.annot_converter import HUMANS_TO_PENN, MPII_TO_HUMANS
 
 from kp_disc_geo import train_generator_geo
 
@@ -111,7 +113,8 @@ if __name__ == "__main__":
     elif opt.tgt == 'humans':
         loader_tgt = LoadHumansDataset(**config['datasets']['h36m_resized_simplified_train']) 
         loader_test = LoadHumansDataset(**config['datasets']['h36m_resized_simplified_test'])
-        kp_map = [0, 1, 2, 3, 6, 7, 8, 13, 14, 17, 18, 19, 25, 26, 27]
+        kp_map = MPII_TO_HUMANS 
+        #kp_map = [0, 1, 2, 3, 6, 7, 8, 13, 14, 17, 18, 19, 25, 26, 27]
  
 
     train_generator_geo(model_kp_detector,
