@@ -8,7 +8,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from evaluation import evaluate
 from sync_batchnorm import DataParallelWithCallback 
-from modules.losses import masked_l2_heatmap_loss  
+from modules.losses import masked_l2_loss ,masked_l2_heatmap_loss  
 from modules.util import kp2gaussian2, gaussian2kp
 from nips.utils import HeatMap
 from nips.MTFAN import convertLayer
@@ -26,9 +26,13 @@ class KPDetectorTrainer(nn.Module):
 
     def forward(self, images, ground_truth, mask=None, kp_map=None):
         dict_out = self.detector(images)
+        #print(f"dict_out[heatmaps] {dict_out['heatmaps'].shape}")
+        
         #loss = masked_l2_loss(keypoints, ground_truth, mask)
         gt = ground_truth if kp_map is None else ground_truth[:, kp_map]
-        #loss = masked_l2_loss(dict_out['heatmaps'], gt, mask)
+        # remove after becasuse masked l2 heatmpat is the correct one
+        # mask = None
+        # loss = masked_l2_loss(dict_out['heatmaps'], gt, mask)
         loss = masked_l2_heatmap_loss(dict_out['heatmaps'], gt, mask)
         kps = unnorm_kp(dict_out['value'])
         #print('heatmap size: ', dict_out['heatmaps'].shape)
@@ -114,7 +118,10 @@ def train_kpdetector(model_kp_detector,
                 print('Annotation with NaN')
                 break
             mask = None if 'kp_mask' not in batch.keys() else batch['kp_mask']
-
+            ######## REMOVE
+            #print(f"b_mask {mask}")
+            #print(f"mask {mask.shape}")
+            ##################
             #kp_detector_out = kp_detector(images, annots, mask)
             kp_detector_out = kp_detector(images, gt_heatmaps, mask)
 

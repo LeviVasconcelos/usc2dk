@@ -38,6 +38,31 @@ def geo_transform(x, d):
 
 def geo_transform_inverse(x, d):
     return batch_image_rotation(x, d)
+    
+def d_unrolled_loop(d_gen_input=None, real_data=None,optimizer_discriminator=None, gen=None,kp_map=None, discriminator=None, train_params=None):
+    
+    optimizer_discriminator.zero_grad()
+    with torch.no_grad():
+        fake_data = gen(d_gen_input,kp_map)
+    
+    gt_maps = discriminator(real_data)
+    generated_maps = discriminator(fake_data['heatmaps'].detach())
+    disc_loss = [] 
+    for i in range(len(gt_maps)):
+        generated_map = generated_maps[i]
+        gt_map = gt_maps[i]
+        disc_loss.append(discriminator_gan_loss(discriminator_maps_generated=generated_map,
+                                    discriminator_maps_real=gt_map,
+                                    weight=train_params['loss_weights']['discriminator_gan']).mean())
+    out_disc = { 'loss': (sum(disc_loss) / len(disc_loss)),
+                  'scales': disc_loss, }
+
+    loss_disc = out_disc['loss'].mean() 
+    loss_disc.backward(create_graph=True)
+
+
+    optimizer_discriminator.step()
+    optimizer_discriminator.zero_grad()
 
 class Buffer():
     def __init__(self, buff_dim=1000):
@@ -87,8 +112,6 @@ class Buffer():
     def get_rot(self):
         return self.get_samples(self.buffer_rot)
             
-
-
 class GeneratorTrainer(nn.Module):
     def __init__(self, generator, discriminator,  
                   train_params):
@@ -203,13 +226,22 @@ def train_generator_geo(model_generator,
     k = 0
     iterator_source = iter(loader_src)
     source_model = copy.deepcopy(model_generator)
+    unrolled_steps = 5
+    max_pck = None
     for epoch in range(logger.epoch, train_params['num_epochs']):
         results = evaluate(model_generator, loader_test, train_params['dataset'], kp_map)
         print('Epoch ' + str(epoch)+ ' MSE: ' + str(results))
         logger.add_scalar('MSE test', results['MSE'], epoch)
         logger.add_scalar('PCK test', results['PCK'], epoch)
- 
-        for i, tgt_batch  in enumerate(tqdm(loader_tgt)):
+
+        if max_pck != None and results["PCK"].numpy() > max_pck:
+            max_pck = results["PCK"].numpy()
+            logger.save_model(models = {'model_kp_detector':model_generator,
+                                    'optimizer_kp_detector':optimizer_generator})
+        elif max_pck == None :
+            max_pck = results["PCK"].numpy()
+            
+        for i, tgt_batch  in enumerate(tqdm(loader_tgt)):            
             try:
                 src_batch = next(iterator_source)
             except:
@@ -218,14 +250,24 @@ def train_generator_geo(model_generator,
 
             angle = random.randint(1,359)
             src_annots = src_batch['annots'].cuda()
-            src_images =  kp2gaussian2(src_annots, (122, 122), 0.5)[:, kp_map]
-            geo_src_images = kp2gaussian2(batch_kp_rotation(src_annots, angle), (122, 122), 0.5)[:, kp_map]
+            src_images =  kp2gaussian2(src_annots, (122, 122), 0.5) #[:, kp_map]
+            geo_src_images = kp2gaussian2(batch_kp_rotation(src_annots, angle), (122, 122), 0.5) #[:, kp_map]
 
             tgt_images = tgt_batch['imgs'].cuda()
             tgt_gt = tgt_batch['annots'].cuda()
             tgt_gt_rot = batch_kp_rotation(tgt_gt, angle)
             geo_tgt_imgs = geo_transform(tgt_images, angle)
-            
+
+            ## code adapted from https://github.com/andrewliao11/unrolled-gans
+            ## Unroll the discriminator here making a deep copy
+            if unrolled_steps > 0:
+                backup = copy.deepcopy(discriminator.state_dict())
+                for i in range(unrolled_steps):
+                    # unrolled loop for non rotated frames
+                    d_unrolled_loop(d_gen_input=tgt_images, real_data=src_images,optimizer_discriminator=optimizer_discriminator, gen=img_generator, kp_map=kp_map, discriminator=discriminator, train_params=train_params)
+                    # unrolled lopp for rot frames
+                    d_unrolled_loop(d_gen_input=geo_tgt_imgs, real_data=geo_src_images,optimizer_discriminator=optimizer_discriminator, gen=img_generator, kp_map=kp_map, discriminator=discriminator, train_params=train_params)
+                
             pred_tgt = img_generator(tgt_images, kp_map) 
             pred_rot_tgt = img_generator(geo_tgt_imgs, kp_map) 
 
@@ -244,6 +286,10 @@ def train_generator_geo(model_generator,
             optimizer_generator.zero_grad()
             optimizer_discriminator.zero_grad()
 
+            # reload disc model
+            if unrolled_steps > 0:
+                discriminator.load_state_dict(backup)
+
             #### save new frame in the buuffer
             buffer.put_no_rot(pred_tgt['heatmaps'].detach())
             buffer.put_rot(pred_rot_tgt['heatmaps'].detach())
@@ -256,7 +302,7 @@ def train_generator_geo(model_generator,
 
 
             discriminator_no_rot_out = discriminatorModel(gt_image=src_images,
-                                                           generated_image=gen_hm_no_rot)
+                                                        generated_image=gen_hm_no_rot)
             discriminator_rot_out = discriminatorModel(gt_image=geo_src_images, 
                                                         generated_image=gen_hm_rot)
 
@@ -271,27 +317,28 @@ def train_generator_geo(model_generator,
                                loss.item(), 
                                logger.iterations)
             logger.add_scalar("Disc Loss", 
-                               loss_disc.item(), 
-                               logger.iterations)
+                                loss_disc.item(), 
+                                logger.iterations)
             logger.add_scalar("Gen Loss", 
                                pred_tgt['generator_loss'].item(), 
                                logger.iterations)
             logger.add_scalar("Weighted Geo Loss",
                                (geo_weight * geo_term).item(),
                                logger.iterations)
+
             scales = discriminator_no_rot_out['scales']
             if len(scales)< 2:
                 scales.append(torch.Tensor([0.])) 
                 scales.append(torch.Tensor([0.]))
             logger.add_scalar("disc_scales/s1",
-                               scales[0].item(),
-                               logger.iterations)
+                            scales[0].item(),
+                            logger.iterations)
             logger.add_scalar("disc_scales/s2",
-                               scales[1].item(),
-                               logger.iterations)
+                            scales[1].item(),
+                            logger.iterations)
             logger.add_scalar("disc_scales/s3",
-                               scales[2].item(),
-                               logger.iterations)
+                            scales[2].item(),
+                            logger.iterations)
             
             ####### LOG VALIDATION
             if i % log_params['eval_frequency'] == 0 or i==0:
@@ -315,7 +362,7 @@ def train_generator_geo(model_generator,
                 logger.add_image('src heatmaps', src_heatmaps, epoch)
                 k += 1
                 k = k % len(log_params['log_imgs']) 
-
+            
             ####### LOG
             logger.step_it()
             
