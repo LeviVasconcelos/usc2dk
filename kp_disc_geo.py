@@ -229,10 +229,9 @@ def train_generator_geo(model_generator,
             if kp_map_src is not None:
                 src_annots = src_annots[:, kp_map_src]
             kgauss_var = 0.15 #0.25
+            ## Detach off only for verification purpose, if you read this, uncomment detach
             src_images =  kp2gaussian2(src_annots, (122, 122), kgauss_var).detach()
             geo_src_images = kp2gaussian2(batch_kp_rotation(src_annots, angle), (122, 122), kgauss_var).detach()
-            #src_images = norm_tensor(src_images).detach()
-            #geo_src_images = norm_tensor(geo_src_images).detach()
 
             tgt_images = tgt_batch['imgs'].cuda()
             tgt_gt = tgt_batch['annots'].cuda()
