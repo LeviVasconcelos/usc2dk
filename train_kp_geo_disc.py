@@ -35,7 +35,7 @@ if __name__ == "__main__":
     parser.add_argument("--device_ids", default="0", 
                          type=lambda x: list(map(int, x.split(','))), 
                          help="Names of the devices comma separated.")
-    parser.add_argument('--epochs', default=50, help="number of epochs")
+    parser.add_argument('--epochs', default=100, help="number of epochs")
     parser.add_argument("--tgt", default='lsp')
     parser.add_argument("--geo", default=1, help="geo loss")
     parser.add_argument("--gamma", default=800, help="gamma")
@@ -70,13 +70,15 @@ if __name__ == "__main__":
     if not os.path.exists(os.path.join(log_dir, os.path.basename(opt.config))):
         copy(opt.config, log_dir)
 
-    logger = Logger(log_dir, save_frequency=50)
+    logger = Logger(log_dir, save_frequency=5)
 
     ##### Model instantiation
     model_kp_detector = KPDetector(**config['model_params']['kp_detector_params']) 
     model_kp_detector.to(opt.device_ids[0]) 
+
     if opt.src_model != 'scratch':
         try:
+            print(f"loading {opt.src_model}")
             kp_state_dict = torch.load(opt.src_model)
             print('Source model loaded: %s' % opt.src_model)
         except:

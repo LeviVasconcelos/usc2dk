@@ -27,7 +27,7 @@ from modules.vgg19 import Vgg19
 from datasets.annot_converter import HUMANS_TO_PENN, HUMANS_TO_LSP
 from sync_batchnorm import DataParallelWithCallback
 from logger import Visualizer
-from evaluation import evaluate
+from evaluation import evaluate  
 
 rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
 resource.setrlimit(resource.RLIMIT_NOFILE, (2048, rlimit[1]))
@@ -38,8 +38,80 @@ def geo_transform(x, d):
 
 def geo_transform_inverse(x, d):
     return batch_image_rotation(x, d)
+    
+def d_unrolled_loop(d_gen_input=None, real_data=None,optimizer_discriminator=None, gen=None,kp_map=None, discriminator=None, train_params=None):
+    
+    optimizer_discriminator.zero_grad()
+    with torch.no_grad():
+        fake_data = gen(d_gen_input,kp_map)
+    
+    gt_maps = discriminator(real_data)
+    generated_maps = discriminator(fake_data['heatmaps'].detach())
+    disc_loss = [] 
+    for i in range(len(gt_maps)):
+        generated_map = generated_maps[i]
+        gt_map = gt_maps[i]
+        disc_loss.append(discriminator_gan_loss(discriminator_maps_generated=generated_map,
+                                    discriminator_maps_real=gt_map,
+                                    weight=train_params['loss_weights']['discriminator_gan']).mean())
+    out_disc = { 'loss': (sum(disc_loss) / len(disc_loss)),
+                  'scales': disc_loss, }
+
+    loss_disc = out_disc['loss'].mean() 
+    loss_disc.backward(create_graph=True)
 
 
+    optimizer_discriminator.step()
+    optimizer_discriminator.zero_grad()
+
+class Buffer():
+    def __init__(self, buff_dim=1000):
+        self.buff_dim = buff_dim
+        self.sampling_dim = None
+        self.buffer_no_rot = torch.Tensor([]).cuda()
+        self.buffer_rot = torch.Tensor([]).cuda()
+    
+    def put_hm(self, buffer, hm):
+        # randomly select half of the samples from the heatmaps
+        if self.sampling_dim is None:
+            self.sampling_dim =int(hm.shape[0]/2)
+            print(f"sampling dim setted at {self.sampling_dim}")
+        random_samples = list(range(0,int(hm.shape[0]/2))) 
+        random.shuffle(random_samples)
+        random_samples = random_samples[:int(hm.shape[0]/2)]
+        hm = hm[random_samples]
+        
+        if buffer.shape[0]+hm.shape[0] <= self.buff_dim:
+            buffer = torch.cat((buffer,hm),0)
+        else:
+            # compute the overflow if the new hm are added 
+            overflow = buffer.shape[0]+hm.shape[0] - self.buff_dim
+            # sample randomly the right amount of sample to have the buffer always filled
+            random_samples = list(range(0,buffer.shape[0])) 
+            random.shuffle(random_samples)
+            random_samples = random_samples[:(buffer.shape[0]-overflow)]
+            # remove some randome elemnts
+            buffer = buffer[random_samples]
+            # sample from it
+            buffer = torch.cat((buffer,hm),0)
+        return buffer 
+
+    def put_no_rot(self, no_rot_hm):
+        self.buffer_no_rot = self.put_hm(self.buffer_no_rot,no_rot_hm)
+    def put_rot(self, rot_hm):
+        self.buffer_rot = self.put_hm(self.buffer_rot,rot_hm)
+        
+    def get_samples(self, buffer):
+        random_samples = list(range(0,buffer.shape[0]))
+        random.shuffle(random_samples)
+        random_samples = random_samples[:self.sampling_dim]
+        return buffer[random_samples]
+    
+    def get_no_rot(self):
+        return self.get_samples(self.buffer_no_rot)
+    def get_rot(self):
+        return self.get_samples(self.buffer_rot)
+            
 class GeneratorTrainer(nn.Module):
     def __init__(self, generator, discriminator,  
                   train_params):
@@ -86,7 +158,9 @@ class DiscriminatorTrainer(nn.Module):
         self.discriminators = discriminators
         self.train_params = train_params
 
-    def forward(self, gt_image, generated_image):
+    def forward(self, gt_image, generated_image, filter=None):
+        
+        #gt_image[""]
         gt_maps = self.discriminators(gt_image)
         generated_maps = self.discriminators(generated_image.detach())
         disc_loss = [] 
@@ -148,17 +222,31 @@ def train_generator_geo(model_generator,
 
     discriminatorModel = DiscriminatorTrainer(discriminator, train_params).cuda()
     discriminatorModel = DataParallelWithCallback(discriminatorModel, device_ids=device_ids)
+    buffer = Buffer()
     k = 0
     kpVariance = train_params['heatmap_var']
     iterator_source = iter(loader_src)
     source_model = copy.deepcopy(model_generator)
+    
+    unrolled_steps = 5
+    buffer_flag = True
+    # saving the model if a new max pck is reached
+    max_pck = None
+
     for epoch in range(logger.epoch, train_params['num_epochs']):
         results = evaluate(model_generator, loader_test, train_params['dataset'], kp_map)
         print('Epoch ' + str(epoch)+ ' MSE: ' + str(results))
         logger.add_scalar('MSE test', results['MSE'], epoch)
         logger.add_scalar('PCK test', results['PCK'], epoch)
- 
-        for i, tgt_batch  in enumerate(tqdm(loader_tgt)):
+
+        if max_pck != None and results["PCK"].numpy() > max_pck:
+            max_pck = results["PCK"].numpy()
+            logger.save_model(models = {'model_kp_detector':model_generator,
+                                    'optimizer_kp_detector':optimizer_generator})
+        elif max_pck == None :
+            max_pck = results["PCK"].numpy()
+            
+        for i, tgt_batch  in enumerate(tqdm(loader_tgt)):            
             try:
                 src_batch = next(iterator_source)
             except:
@@ -174,9 +262,19 @@ def train_generator_geo(model_generator,
             tgt_gt = tgt_batch['annots'].cuda()
             tgt_gt_rot = batch_kp_rotation(tgt_gt, angle)
             geo_tgt_imgs = geo_transform(tgt_images, angle)
-            
-            pred_tgt = img_generator(tgt_images, kp_map)
-            pred_rot_tgt = img_generator(geo_tgt_imgs, kp_map)
+
+            ## code adapted from https://github.com/andrewliao11/unrolled-gans
+            ## Unroll the discriminator here making a deep copy
+            if unrolled_steps > 0:
+                backup = copy.deepcopy(discriminator.state_dict())
+                for i in range(unrolled_steps):
+                    # unrolled loop for non rotated frames
+                    d_unrolled_loop(d_gen_input=tgt_images, real_data=src_images,optimizer_discriminator=optimizer_discriminator, gen=img_generator, kp_map=kp_map, discriminator=discriminator, train_params=train_params)
+                    # unrolled lopp for rot frames
+                    d_unrolled_loop(d_gen_input=geo_tgt_imgs, real_data=geo_src_images,optimizer_discriminator=optimizer_discriminator, gen=img_generator, kp_map=kp_map, discriminator=discriminator, train_params=train_params)
+                
+            pred_tgt = img_generator(tgt_images, kp_map) 
+            pred_rot_tgt = img_generator(geo_tgt_imgs, kp_map) 
 
             geo_loss = geo_consistency(pred_tgt['heatmaps'], 
                                        pred_rot_tgt['heatmaps'],
@@ -193,10 +291,29 @@ def train_generator_geo(model_generator,
             optimizer_generator.zero_grad()
             optimizer_discriminator.zero_grad()
 
+            # reload disc model
+            if unrolled_steps > 0:
+                discriminator.load_state_dict(backup)
+            if buffer_flag:
+                #### save new frame in the buuffer
+                buffer.put_no_rot(pred_tgt['heatmaps'].detach())
+                buffer.put_rot(pred_rot_tgt['heatmaps'].detach())
+                #### load frame from the buffer 
+                random_samples = list(range(0,pred_rot_tgt['heatmaps'].shape[0]))
+                random.shuffle(random_samples)
+                random_samples = random_samples[:buffer.sampling_dim]
+                gen_hm_no_rot = torch.cat((buffer.get_no_rot(),pred_tgt['heatmaps'][random_samples].detach()), 0)
+                gen_hm_rot = torch.cat((buffer.get_rot(),pred_rot_tgt['heatmaps'][random_samples].detach()), 0)
+            else:
+                discriminator_no_rot_out = discriminatorModel(gt_image=src_images,
+                                                            generated_image=pred_tgt['heatmaps'].detach())
+                discriminator_rot_out = discriminatorModel(gt_image=geo_src_images, 
+                                                            generated_image=pred_rot_tgt['heatmaps'].detach())
+
             discriminator_no_rot_out = discriminatorModel(gt_image=src_images,
-                                                           generated_image=pred_tgt['heatmaps'].detach())
+                                                        generated_image=gen_hm_no_rot)
             discriminator_rot_out = discriminatorModel(gt_image=geo_src_images, 
-                                                        generated_image=pred_rot_tgt['heatmaps'].detach())
+                                                        generated_image=gen_hm_rot)
 
             loss_disc = discriminator_no_rot_out['loss'].mean() + 0 * discriminator_rot_out['loss'].mean()
             loss_disc.backward()
@@ -209,27 +326,28 @@ def train_generator_geo(model_generator,
                                loss.item(), 
                                logger.iterations)
             logger.add_scalar("Disc Loss", 
-                               loss_disc.item(), 
-                               logger.iterations)
+                                loss_disc.item(), 
+                                logger.iterations)
             logger.add_scalar("Gen Loss", 
                                pred_tgt['generator_loss'].item(), 
                                logger.iterations)
             logger.add_scalar("Weighted Geo Loss",
                                (geo_weight * geo_term).item(),
                                logger.iterations)
+
             scales = discriminator_no_rot_out['scales']
             if len(scales)< 2:
                 scales.append(torch.Tensor([0.])) 
                 scales.append(torch.Tensor([0.]))
             logger.add_scalar("disc_scales/s1",
-                               scales[0].item(),
-                               logger.iterations)
+                            scales[0].item(),
+                            logger.iterations)
             logger.add_scalar("disc_scales/s2",
-                               scales[1].item(),
-                               logger.iterations)
+                            scales[1].item(),
+                            logger.iterations)
             logger.add_scalar("disc_scales/s3",
-                               scales[2].item(),
-                               logger.iterations)
+                            scales[2].item(),
+                            logger.iterations)
             
             ####### LOG VALIDATION
             if i % log_params['eval_frequency'] == 0 or i==0:
@@ -253,7 +371,7 @@ def train_generator_geo(model_generator,
                 logger.add_image('src heatmaps', src_heatmaps, epoch)
                 k += 1
                 k = k % len(log_params['log_imgs']) 
-
+            
             ####### LOG
             logger.step_it()
             

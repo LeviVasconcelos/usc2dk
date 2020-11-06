@@ -91,5 +91,4 @@ def evaluate(model, loader, dset='mpii', filter=None, device='cuda'):
             }
     model.train()
     return out
-
-
+    

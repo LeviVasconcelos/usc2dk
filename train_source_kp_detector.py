@@ -32,7 +32,7 @@ if __name__ == "__main__":
     parser.add_argument("--device_ids", default="0", 
                          type=lambda x: list(map(int, x.split(','))), 
                          help="Names of the devices comma separated.")
-    parser.add_argument("--dataset", default="h36m", type=str, help="which dataset to use for training. [h36m | penn]")
+    parser.add_argument("--dataset", default="humans", type=str, help="which dataset to use for training. [h36m | penn]")
     parser.add_argument("--tgt_model", default=None, type=str, help="for nips comparisson: name of dataset to build the model for (although training on --dataset")
     parser.add_argument("--test", action="store_true", help='test instead of train model')
     parser.add_argument("--fan", action="store_true", help='model is fan')
@@ -62,8 +62,8 @@ if __name__ == "__main__":
         config['model_params']['kp_detector_params']['num_kp'] = 14
     elif opt.dataset == "mpii":
         config['model_params']['kp_detector_params']['num_kp'] = 16
-    elif opt.dataset == "h36m":
-        config['model_params']['kp_detector_params']['num_kp'] = 32
+    elif opt.dataset == "humans":
+        config['model_params']['kp_detector_params']['num_kp'] = 15
 
     kp_map = None
     if opt.tgt_model == "mpii":
@@ -81,9 +81,11 @@ if __name__ == "__main__":
     ##### Dataset loading
     dataset_source = ""
     dataset_eval = ""
-    if opt.dataset == "h36m":
-        dataset_source = 'h36m_resized_crop_protocol2_train'
-        dataset_eval = 'h36m_resized_crop_protocol2_target'
+    #        loader_tgt = LoadHumansDataset(**config['datasets']['h36m_resized_simplified_train']) 
+    #    loader_test = LoadHumansDataset(**config['datasets']['h36m_resized_simplified_test'])
+    if opt.dataset == "humans":
+        dataset_source = 'h36m_resized_simplified_train'
+        dataset_eval = 'h36m_resized_simplified_test'
         loader = LoadHumansDataset(**config['datasets'][dataset_source])
         loader_tgt = LoadHumansDataset(**config['datasets'][dataset_eval])
     elif opt.dataset == "penn":

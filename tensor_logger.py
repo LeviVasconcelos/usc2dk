@@ -26,6 +26,9 @@ class Logger:
 
     def step_it(self):
         self.iterations += 1
+    
+    def save_model(self, models):
+        self.checkpoint.save_checkpoint(self.epoch, self.iterations, models, self.tag)  
 
     def step_epoch(self, models):
         self.epoch += 1
