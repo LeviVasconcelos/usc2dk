@@ -172,8 +172,8 @@ def kp2gaussian2(kp, spatial_size, kp_variance, temp=0.1):
     out = F.softmax(out /  temp, dim=2)
     out = out.view(*shape)
     
-    return torch.where(out < 4e-5, torch.zeros(out.shape).cuda(), out)
-    #return out
+    #return torch.where(out < 4e-5, torch.zeros(out.shape).cuda(), out)
+    return out
 
 
 def kp2gaussian(kp, spatial_size, kp_variance):

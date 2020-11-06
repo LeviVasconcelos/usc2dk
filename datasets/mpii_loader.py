@@ -68,7 +68,7 @@ class MPIIDataset(data.Dataset):
         self.num_joints = 16
 
         self.samples = self.make_dataset()
-        self.samples = self.samples[:2000]
+        self.samples = self.samples[:200000]
 
         print('Loading MPIIDataset: %s split: %s' % (self.root_dir, self.image_set))
 

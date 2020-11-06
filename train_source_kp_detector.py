@@ -36,6 +36,7 @@ if __name__ == "__main__":
     parser.add_argument("--tgt_model", default=None, type=str, help="for nips comparisson: name of dataset to build the model for (although training on --dataset")
     parser.add_argument("--test", action="store_true", help='test instead of train model')
     parser.add_argument("--fan", action="store_true", help='model is fan')
+    parser.add_argument("--epochs", default=500, type=int, help="nubmer of epochs to train")
     opt = parser.parse_args()
 
     with open(opt.config) as f:
@@ -53,6 +54,7 @@ if __name__ == "__main__":
         copy(opt.config, log_dir)
 
     logger = Logger(log_dir, save_frequency=50)
+    config['train_params']['num_epochs'] = opt.epochs
 
     if opt.dataset == "penn":
         config['model_params']['kp_detector_params']['num_kp'] = 13
