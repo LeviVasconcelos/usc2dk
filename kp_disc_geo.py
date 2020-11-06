@@ -226,8 +226,12 @@ def train_generator_geo(model_generator,
     k = 0
     iterator_source = iter(loader_src)
     source_model = copy.deepcopy(model_generator)
+    
     unrolled_steps = 5
+    buffer_flag = True
+    # saving the model if a new max pck is reached
     max_pck = None
+
     for epoch in range(logger.epoch, train_params['num_epochs']):
         results = evaluate(model_generator, loader_test, train_params['dataset'], kp_map)
         print('Epoch ' + str(epoch)+ ' MSE: ' + str(results))
@@ -250,8 +254,10 @@ def train_generator_geo(model_generator,
 
             angle = random.randint(1,359)
             src_annots = src_batch['annots'].cuda()
-            src_images =  kp2gaussian2(src_annots, (122, 122), 0.5) #[:, kp_map]
-            geo_src_images = kp2gaussian2(batch_kp_rotation(src_annots, angle), (122, 122), 0.5) #[:, kp_map]
+
+            src_images =  kp2gaussian2(src_annots, (122, 122), 0.5).detach() 
+            geo_src_images = kp2gaussian2(batch_kp_rotation(src_annots, angle), (122, 122), ).detach() 
+
 
             tgt_images = tgt_batch['imgs'].cuda()
             tgt_gt = tgt_batch['annots'].cuda()
@@ -289,17 +295,21 @@ def train_generator_geo(model_generator,
             # reload disc model
             if unrolled_steps > 0:
                 discriminator.load_state_dict(backup)
-
-            #### save new frame in the buuffer
-            buffer.put_no_rot(pred_tgt['heatmaps'].detach())
-            buffer.put_rot(pred_rot_tgt['heatmaps'].detach())
-            #### load frame from the buffer 
-            random_samples = list(range(0,pred_rot_tgt['heatmaps'].shape[0]))
-            random.shuffle(random_samples)
-            random_samples = random_samples[:buffer.sampling_dim]
-            gen_hm_no_rot = torch.cat((buffer.get_no_rot(),pred_tgt['heatmaps'][random_samples].detach()), 0)
-            gen_hm_rot = torch.cat((buffer.get_rot(),pred_rot_tgt['heatmaps'][random_samples].detach()), 0)
-
+            if buffer_flag:
+                #### save new frame in the buuffer
+                buffer.put_no_rot(pred_tgt['heatmaps'].detach())
+                buffer.put_rot(pred_rot_tgt['heatmaps'].detach())
+                #### load frame from the buffer 
+                random_samples = list(range(0,pred_rot_tgt['heatmaps'].shape[0]))
+                random.shuffle(random_samples)
+                random_samples = random_samples[:buffer.sampling_dim]
+                gen_hm_no_rot = torch.cat((buffer.get_no_rot(),pred_tgt['heatmaps'][random_samples].detach()), 0)
+                gen_hm_rot = torch.cat((buffer.get_rot(),pred_rot_tgt['heatmaps'][random_samples].detach()), 0)
+            else:
+                discriminator_no_rot_out = discriminatorModel(gt_image=src_images,
+                                                            generated_image=pred_tgt['heatmaps'].detach())
+                discriminator_rot_out = discriminatorModel(gt_image=geo_src_images, 
+                                                            generated_image=pred_rot_tgt['heatmaps'].detach())
 
             discriminator_no_rot_out = discriminatorModel(gt_image=src_images,
                                                         generated_image=gen_hm_no_rot)

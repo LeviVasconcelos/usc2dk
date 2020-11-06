@@ -159,7 +159,7 @@ if __name__ == "__main__":
         kp_map = HUMANS_TO_LSP
     elif opt.tgt == 'humans':
         loader_test = LoadHumansDataset(**config['datasets']['h36m_resized_simplified_test'])
-        kp_map =  None #MPII_TO_HUMANS # #
+        kp_map =  MPII_TO_HUMANS # #
         # kp_map = [0, 1, 2, 3, 6, 7, 8, 13, 14, 17, 18, 19, 25, 26, 27]
 
     results, imgs = evaluate(model_kp_detector, loader_test, filter=kp_map,dset=opt.tgt)
