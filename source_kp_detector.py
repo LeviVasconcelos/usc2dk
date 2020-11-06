@@ -30,15 +30,8 @@ class KPDetectorTrainer(nn.Module):
         
         #loss = masked_l2_loss(keypoints, ground_truth, mask)
         gt = ground_truth if kp_map is None else ground_truth[:, kp_map]
-<<<<<<< HEAD
         #loss = masked_l2_loss(dict_out['heatmaps'], gt, mask)
         loss = masked_l2_heatmap_loss(dict_out['heatmaps'], gt.detach(), mask)
-=======
-        # remove after becasuse masked l2 heatmpat is the correct one
-        # mask = None
-        # loss = masked_l2_loss(dict_out['heatmaps'], gt, mask)
-        loss = masked_l2_heatmap_loss(dict_out['heatmaps'], gt, mask)
->>>>>>> new_features
         kps = unnorm_kp(dict_out['value'])
         #print('heatmap size: ', dict_out['heatmaps'].shape)
         #print('kp out: ', dict_out['value'])

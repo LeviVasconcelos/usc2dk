@@ -29,6 +29,9 @@ from sync_batchnorm import DataParallelWithCallback
 from logger import Visualizer
 from evaluation import evaluate  
 
+from modules.affine_augmentation import batch_kp_affine, batch_img_affine, inverse_aff_values
+
+
 rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
 resource.setrlimit(resource.RLIMIT_NOFILE, (2048, rlimit[1]))
 COLORS = ['black', 'brown', 'royalblue','red','navy', 'orangered','blue', 'tomato', 'purple', 'darkorange', 'darkmagenta', 'darkgoldenrod' , 'cyan', 'yellow', 'white', 'lightgrey']
@@ -228,8 +231,9 @@ def train_generator_geo(model_generator,
     iterator_source = iter(loader_src)
     source_model = copy.deepcopy(model_generator)
     
-    unrolled_steps = 5
-    buffer_flag = True
+    unrolled_steps = train_params["unrolled_steps"] #5
+    buffer_flag = train_params["buffer"] # True
+    print(f"buffer {buffer_flag} unrolled_steps {unrolled_steps}")
     # saving the model if a new max pck is reached
     max_pck = None
 
@@ -282,7 +286,7 @@ def train_generator_geo(model_generator,
                                        geo_transform_inverse, angle)
 
             geo_term = geo_loss['t'] + geo_loss['t_inv']
-            generator_term = pred_tgt['generator_loss'] + 0 * pred_rot_tgt['generator_loss']
+            generator_term = pred_tgt['generator_loss'] +  pred_rot_tgt['generator_loss'] #befor here was 0
             geo_weight = train_params['loss_weights']['geometric']
             loss = geo_weight * geo_term + (generator_term) 
             loss.backward()
@@ -304,16 +308,15 @@ def train_generator_geo(model_generator,
                 random_samples = random_samples[:buffer.sampling_dim]
                 gen_hm_no_rot = torch.cat((buffer.get_no_rot(),pred_tgt['heatmaps'][random_samples].detach()), 0)
                 gen_hm_rot = torch.cat((buffer.get_rot(),pred_rot_tgt['heatmaps'][random_samples].detach()), 0)
+                discriminator_no_rot_out = discriminatorModel(gt_image=src_images,
+                                                            generated_image=gen_hm_no_rot)
+                discriminator_rot_out = discriminatorModel(gt_image=geo_src_images, 
+                                                            generated_image=gen_hm_rot)
             else:
                 discriminator_no_rot_out = discriminatorModel(gt_image=src_images,
                                                             generated_image=pred_tgt['heatmaps'].detach())
                 discriminator_rot_out = discriminatorModel(gt_image=geo_src_images, 
                                                             generated_image=pred_rot_tgt['heatmaps'].detach())
-
-            discriminator_no_rot_out = discriminatorModel(gt_image=src_images,
-                                                        generated_image=gen_hm_no_rot)
-            discriminator_rot_out = discriminatorModel(gt_image=geo_src_images, 
-                                                        generated_image=gen_hm_rot)
 
             loss_disc = discriminator_no_rot_out['loss'].mean() + 0 * discriminator_rot_out['loss'].mean()
             loss_disc.backward()

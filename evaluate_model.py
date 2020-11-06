@@ -77,7 +77,7 @@ def eval_model(model, tgt_batch, heatmap_res=122):
     model.eval()
     images = tgt_batch['imgs']
     annots = tgt_batch['annots']
-    gt_heatmaps = kp2gaussian2(annots, (heatmap_res, heatmap_res), 0.5)
+    gt_heatmaps = kp2gaussian2(annots, (heatmap_res, heatmap_res), 0.15)
     mask = None if 'kp_mask' not in tgt_batch.keys() else tgt_batch['kp_mask']
     out = None
     with torch.no_grad():
