@@ -231,8 +231,8 @@ def train_generator_geo(model_generator,
     iterator_source = iter(loader_src)
     source_model = copy.deepcopy(model_generator)
     
-    unrolled_steps = train_params["unrolled_steps"] #5
-    buffer_flag = train_params["buffer"] # True
+    unrolled_steps = train_params["unrolled_steps"] 
+    buffer_flag = train_params["buffer"] 
     print(f"buffer {buffer_flag} unrolled_steps {unrolled_steps}")
     # saving the model if a new max pck is reached
     max_pck = None
@@ -286,7 +286,7 @@ def train_generator_geo(model_generator,
                                        geo_transform_inverse, angle)
 
             geo_term = geo_loss['t'] + geo_loss['t_inv']
-            generator_term = pred_tgt['generator_loss'] +  pred_rot_tgt['generator_loss'] #befor here was 0
+            generator_term = pred_tgt['generator_loss'] + 0 * pred_rot_tgt['generator_loss'] 
             geo_weight = train_params['loss_weights']['geometric']
             loss = geo_weight * geo_term + (generator_term) 
             loss.backward()
