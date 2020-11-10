@@ -29,7 +29,7 @@ from sync_batchnorm import DataParallelWithCallback
 from logger import Visualizer
 from evaluation import evaluate  
 
-from modules.affine_augmentation import batch_kp_affine, batch_img_affine, inverse_aff_values
+from modules.affine_augmentation import batch_kp_affine, batch_img_affine, inverse_aff_values, inverse_affine, batch_affine
 
 
 rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
@@ -179,8 +179,26 @@ class DiscriminatorTrainer(nn.Module):
  
 def geo_consistency(y, y_rotated, t, t_inv, d):
     out = {}
+    #print(f"y_rot {y_rotated.shape}")
+    #print(f"y {y.shape}")
     out['t'] = l1_loss(t(y, d), y_rotated).mean()
     out['t_inv'] = l1_loss(t_inv(y_rotated, -d), y).mean()
+    return out
+
+def geo_consistency_affine(y, y_affine,aff_matrix):
+    out = {}
+    #print(f"y_rot {y_rotated.shape}")
+    #print(f"y {y.shape}")
+    #[batchsize, num_kp, 122, 122]
+    # apply the affine transf to the non rotated heatmpas
+    orig_to_aff_hm = batch_affine(y,aff_matrix, inverse=False)
+    out['t'] = l1_loss(orig_to_aff_hm, y_affine).mean()
+
+    # apply the inverse affine trans to the rotated heatmaps
+    inverse_aff = inverse_aff_values(aff_matrix)
+    aff_to_orig_hm = batch_affine(y_affine,inverse_aff, inverse=True)
+
+    out['t_inv'] = l1_loss(aff_to_orig_hm, y).mean()
     return out
 
 def train_generator_geo(model_generator,
@@ -233,9 +251,11 @@ def train_generator_geo(model_generator,
     
     unrolled_steps = train_params["unrolled_steps"] 
     buffer_flag = train_params["buffer"] 
+    affine_augmentation = train_params["affine_augmentation"]
     print(f"buffer {buffer_flag} unrolled_steps {unrolled_steps}")
     # saving the model if a new max pck is reached
     max_pck = None
+    augmneted_attention = train_params["geom_attention"]
 
     for epoch in range(logger.epoch, train_params['num_epochs']):
         results = evaluate(model_generator, loader_test, train_params['dataset'], kp_map)
@@ -257,15 +277,24 @@ def train_generator_geo(model_generator,
                 iterator_source = iter(loader_src)
                 src_batch = next(iterator_source)
 
-            angle = random.randint(1,359)
             src_annots = src_batch['annots'].cuda()
-            src_images =  kp2gaussian2(src_annots, (122, 122), kpVariance).detach()
-            geo_src_images = kp2gaussian2(batch_kp_rotation(src_annots, angle), (122, 122), kpVariance).detach()
-
+            src_images =  kp2gaussian2(src_annots, (122, 122), kpVariance).detach()   
             tgt_images = tgt_batch['imgs'].cuda()
             tgt_gt = tgt_batch['annots'].cuda()
-            tgt_gt_rot = batch_kp_rotation(tgt_gt, angle)
-            geo_tgt_imgs = geo_transform(tgt_images, angle)
+
+            if not affine_augmentation:
+                angle = random.randint(1,359)
+                geo_src_images = kp2gaussian2(batch_kp_rotation(src_annots, angle), (122, 122), kpVariance).detach()
+                tgt_gt_rot = batch_kp_rotation(tgt_gt, angle)
+                geo_tgt_imgs = geo_transform(tgt_images, angle)
+            else:
+                # perform affine transformation
+                geo_tgt_imgs, aff_matrix = batch_img_affine(tgt_images) # uses the predefined angle translation and ranges
+                tgt_gt_rot = batch_kp_affine(tgt_gt,aff_matrix)
+                src_annots = batch_kp_affine(tgt_gt,aff_matrix)
+                geo_src_images = kp2gaussian2(src_annots, (122, 122), kpVariance).detach()
+
+
 
             ## code adapted from https://github.com/andrewliao11/unrolled-gans
             ## Unroll the discriminator here making a deep copy
@@ -279,14 +308,18 @@ def train_generator_geo(model_generator,
                 
             pred_tgt = img_generator(tgt_images, kp_map) 
             pred_rot_tgt = img_generator(geo_tgt_imgs, kp_map) 
-
-            geo_loss = geo_consistency(pred_tgt['heatmaps'], 
-                                       pred_rot_tgt['heatmaps'],
-                                       geo_transform,
-                                       geo_transform_inverse, angle)
+            if not affine_augmentation:
+                geo_loss = geo_consistency(pred_tgt['heatmaps'], 
+                                        pred_rot_tgt['heatmaps'],
+                                        geo_transform,
+                                        geo_transform_inverse, angle)
+            else:
+                geo_loss = geo_consistency_affine(pred_tgt['heatmaps'], 
+                                        pred_rot_tgt['heatmaps'],
+                                        aff_matrix)
 
             geo_term = geo_loss['t'] + geo_loss['t_inv']
-            generator_term = pred_tgt['generator_loss'] + 0 * pred_rot_tgt['generator_loss'] 
+            generator_term = pred_tgt['generator_loss'] + augmneted_attention * pred_rot_tgt['generator_loss'] 
             geo_weight = train_params['loss_weights']['geometric']
             loss = geo_weight * geo_term + (generator_term) 
             loss.backward()
@@ -318,7 +351,7 @@ def train_generator_geo(model_generator,
                 discriminator_rot_out = discriminatorModel(gt_image=geo_src_images, 
                                                             generated_image=pred_rot_tgt['heatmaps'].detach())
 
-            loss_disc = discriminator_no_rot_out['loss'].mean() + 0 * discriminator_rot_out['loss'].mean()
+            loss_disc = discriminator_no_rot_out['loss'].mean() + augmneted_attention * discriminator_rot_out['loss'].mean()
             loss_disc.backward()
 
             optimizer_discriminator.step()

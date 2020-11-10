@@ -75,7 +75,7 @@ if __name__ == "__main__":
     ##### Model instantiation
     model_kp_detector = KPDetector(**config['model_params']['kp_detector_params']) 
     model_kp_detector.to(opt.device_ids[0]) 
-
+    #model_kp_detector.to("cuda:1")
     if opt.src_model != 'scratch':
         try:
             print(f"loading {opt.src_model}")
@@ -92,6 +92,7 @@ if __name__ == "__main__":
     #model_discriminator = MultiScaleDiscriminator(config['model_params']['discriminator_heatmap_params'], scales=[1, 0.5, 0.25])
     model_discriminator = MultiScaleDiscriminator(config['model_params']['discriminator_heatmap_params'], scales=[1.])
     model_discriminator.to(opt.device_ids[0])
+    #model_discriminator.to("cuda:1")
 
     disc_params = config['model_params']['discriminator_params']
     obj_edges = opt.tgt

@@ -13,11 +13,19 @@
 
 import numbers
 from collections.abc import Sequence
-from typing import Tuple, List, Optional
+from typing import Tuple, List, Optional,Any, Optional
 from torchvision.transforms import functional as F
 from torch import Tensor
 import torch
 import math
+import torchvision
+import cv2 as cv
+from PIL import Image, ImageDraw
+import math
+import warnings
+import numpy as np
+from torch.jit.annotations import List, Tuple
+
 
 def _get_image_size(img: Tensor) -> List[int]:
     """Returns image sizea as (w, h)
@@ -155,10 +163,32 @@ class RandomAffine(torch.nn.Module):
         d['resample'] = _pil_interpolation_to_str[d['resample']]
         return s.format(name=self.__class__.__name__, **d)
 
-def inverse_affine(img, ret):
-    ### inverse the ret
-    return F.affine(img, *ret, resample=self.resample, fillcolor=self.fillcolor), ret 
+def inverse_affine(img, ret, inverse=True):
+    if inverse:
+        ### apply first the translation
+        ret_translation = ( 0, (ret[1][0],ret[1][1]), 1, (0,0) )
+        img =  F.affine(img, *ret_translation, resample=0, fillcolor=0)
+    # and then rotation and scale 
+    ret_scale_rot = ( ret[0], (0,0), ret[2], (ret[3][0],ret[3][1]) )
+    img = F.affine(img, *ret_scale_rot, resample=0, fillcolor=0)
     
+    if not inverse:
+        ### apply first the translation
+        ret_translation = ( 0, (ret[1][0],ret[1][1]), 1, (0,0) )
+        img =  F.affine(img, *ret_translation, resample=0, fillcolor=0)
+    
+    return img, ret 
+    
+def batch_affine(batch, inverse_aff, inverse=True):
+    batch_inv_aff = torch.Tensor([])
+    for i in range(batch.shape[0]):
+        kps_heatmap = torch.tensor([])
+        for kp in batch[i]:
+            mg, _ = inverse_affine(Image.fromarray(kp.cpu().detach().numpy()),inverse_aff[i], inverse)
+            mg = torchvision.transforms.ToTensor()(mg)[0].unsqueeze(0)
+            kps_heatmap = torch.cat((kps_heatmap,mg),0)
+        batch_inv_aff = torch.cat((batch_inv_aff,kps_heatmap.unsqueeze(0)),0)
+    return batch_inv_aff.cuda()
     
 def _setup_size(size, error_msg):
     if isinstance(size, numbers.Number):
@@ -223,7 +253,7 @@ def _get_affine_matrix(angle: float, translate: List[float], scale: float, shear
     return matrix
 
 def batch_kp_affine(kps, matrices, inverse=False):
-    trans_kps = torch.Tensor([])
+    trans_kps = torch.Tensor([]).cuda()
     for i in range(len(matrices)):
         # get the rss matrix 
         matrix  = _get_affine_matrix(*matrices[i])
@@ -240,8 +270,8 @@ def batch_kp_affine(kps, matrices, inverse=False):
 
             
         ones = torch.zeros(15).unsqueeze(1) +1
-        rot_kps = torch.cat((rot_kps, ones ),dim=-1)
-        rot_kps = torch.matmul(rot_kps, matrix.t()) 
+        rot_kps = torch.cat((rot_kps, ones.cuda() ),dim=-1)
+        rot_kps = torch.matmul(rot_kps, matrix.t().cuda()) 
 
         if not inverse:
             rot_kps = unnorm_kp(rot_kps)
@@ -286,4 +316,15 @@ def inverse_aff_values(aff_matrices):
     return inverse_aff
 
 def norm_kp(kps):
-    return (2./127.) * (kps) - 1 
+    return (2./127.) * (kps) - 1
+
+
+def unnorm_kp(kps):
+    return (127./2.) * (kps + 1)
+
+def tensor_to_image(x):
+    out = x.clone().detach().cpu()
+    out = out.numpy()
+    out = out if out.shape[0] == 3 else np.repeat(out, 3, axis=0)
+    out = (out * 255).astype(np.uint8)
+    return out
