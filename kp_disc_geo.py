@@ -68,7 +68,7 @@ def d_unrolled_loop(d_gen_input=None, real_data=None,optimizer_discriminator=Non
     optimizer_discriminator.zero_grad()
 
 class Buffer():
-    def __init__(self, buff_dim=1000):
+    def __init__(self, buff_dim=200):
         self.buff_dim = buff_dim
         self.sampling_dim = None
         self.buffer_no_rot = torch.Tensor([]).cuda()
@@ -164,6 +164,8 @@ class DiscriminatorTrainer(nn.Module):
     def forward(self, gt_image, generated_image, filter=None):
         
         #gt_image[""]
+        #print(f"gt_image {gt_image.shape}")
+        #print(f"generated_image {generated_image.shape}")
         gt_maps = self.discriminators(gt_image)
         generated_maps = self.discriminators(generated_image.detach())
         disc_loss = [] 
@@ -200,6 +202,26 @@ def geo_consistency_affine(y, y_affine,aff_matrix):
 
     out['t_inv'] = l1_loss(aff_to_orig_hm, y).mean()
     return out
+
+### pytorch implementation
+def angle_difference(kps,rot_kps,gt_angle,loss, device="cuda"):
+    c = torch.zeros(kps.shape[0],kps.shape[1],2).to(device)
+  
+    v0 = c - rot_kps
+    v1 = c - kps
+
+    stack = torch.stack([v0,v1], 2)
+    det =  torch.det(stack)
+    dot = torch.sum(v0*v1, dim=2)
+
+    angle = torch.atan2(det,dot)
+    gt_angle = torch.tensor(gt_angle).type(torch.FloatTensor)
+    gt_angle = gt_angle.cuda()
+    #print(f"angle_shape {angle.shape}")
+    #print(f"kps_shape {kps.shape}")
+    angle = (angle*180/np.pi).mean()
+    #print(angle)
+    return loss(angle,gt_angle)
 
 def train_generator_geo(model_generator,
                        discriminator,
@@ -255,7 +277,10 @@ def train_generator_geo(model_generator,
     print(f"buffer {buffer_flag} unrolled_steps {unrolled_steps}")
     # saving the model if a new max pck is reached
     max_pck = None
-    augmneted_attention = train_params["geom_attention"]
+    geom_attention = train_params["geom_attention"]
+
+    angle_difference_flag = train_params["angle_difference"] # use the angle difference instead of equivariance
+    geo_loss = torch.nn.MSELoss()
 
     for epoch in range(logger.epoch, train_params['num_epochs']):
         results = evaluate(model_generator, loader_test, train_params['dataset'], kp_map)
@@ -286,13 +311,18 @@ def train_generator_geo(model_generator,
                 angle = random.randint(1,359)
                 geo_src_images = kp2gaussian2(batch_kp_rotation(src_annots, angle), (122, 122), kpVariance).detach()
                 tgt_gt_rot = batch_kp_rotation(tgt_gt, angle)
-                geo_tgt_imgs = geo_transform(tgt_images, angle)
+                tgt_gt_rot = tgt_gt_rot.detach()
+                geo_tgt_imgs = geo_transform(tgt_images, angle).detach()
             else:
                 # perform affine transformation
                 geo_tgt_imgs, aff_matrix = batch_img_affine(tgt_images) # uses the predefined angle translation and ranges
+                geo_tgt_imgs = geo_tgt_imgs.detach()
                 tgt_gt_rot = batch_kp_affine(tgt_gt,aff_matrix)
+                tgt_gt_rot = tgt_gt_rot.detach()
                 src_annots = batch_kp_affine(tgt_gt,aff_matrix)
-                geo_src_images = kp2gaussian2(src_annots, (122, 122), kpVariance).detach()
+                src_annots = src_annots.detach()
+                geo_src_images = kp2gaussian2(src_annots, (122, 122), kpVariance)
+                geo_src_images = geo_src_images.detach()
 
 
 
@@ -300,26 +330,31 @@ def train_generator_geo(model_generator,
             ## Unroll the discriminator here making a deep copy
             if unrolled_steps > 0:
                 backup = copy.deepcopy(discriminator.state_dict())
-                for i in range(unrolled_steps):
+                for iterat in range(unrolled_steps):
                     # unrolled loop for non rotated frames
                     d_unrolled_loop(d_gen_input=tgt_images, real_data=src_images,optimizer_discriminator=optimizer_discriminator, gen=img_generator, kp_map=kp_map, discriminator=discriminator, train_params=train_params)
                     # unrolled lopp for rot frames
-                    d_unrolled_loop(d_gen_input=geo_tgt_imgs, real_data=geo_src_images,optimizer_discriminator=optimizer_discriminator, gen=img_generator, kp_map=kp_map, discriminator=discriminator, train_params=train_params)
+                    if geom_attention == 1:
+                        d_unrolled_loop(d_gen_input=geo_tgt_imgs, real_data=geo_src_images,optimizer_discriminator=optimizer_discriminator, gen=img_generator, kp_map=kp_map, discriminator=discriminator, train_params=train_params)
                 
             pred_tgt = img_generator(tgt_images, kp_map) 
             pred_rot_tgt = img_generator(geo_tgt_imgs, kp_map) 
-            if not affine_augmentation:
-                geo_loss = geo_consistency(pred_tgt['heatmaps'], 
-                                        pred_rot_tgt['heatmaps'],
-                                        geo_transform,
-                                        geo_transform_inverse, angle)
+            # compute the equivariance using the angle difference
+            if angle_difference_flag:
+                geo_term = angle_difference(pred_tgt["kps"], pred_rot_tgt["kps"], angle, geo_loss)
             else:
-                geo_loss = geo_consistency_affine(pred_tgt['heatmaps'], 
-                                        pred_rot_tgt['heatmaps'],
-                                        aff_matrix)
+                if not affine_augmentation:
+                    geo_loss = geo_consistency(pred_tgt['heatmaps'], 
+                                            pred_rot_tgt['heatmaps'],
+                                            geo_transform,
+                                            geo_transform_inverse, angle)
+                else:
+                    geo_loss = geo_consistency_affine(pred_tgt['heatmaps'], 
+                                            pred_rot_tgt['heatmaps'],
+                                            aff_matrix)
 
-            geo_term = geo_loss['t'] + geo_loss['t_inv']
-            generator_term = pred_tgt['generator_loss'] + augmneted_attention * pred_rot_tgt['generator_loss'] 
+                geo_term = geo_loss['t'] + geo_loss['t_inv']
+            generator_term = pred_tgt['generator_loss'] + geom_attention * pred_rot_tgt['generator_loss'] 
             geo_weight = train_params['loss_weights']['geometric']
             loss = geo_weight * geo_term + (generator_term) 
             loss.backward()
@@ -351,7 +386,7 @@ def train_generator_geo(model_generator,
                 discriminator_rot_out = discriminatorModel(gt_image=geo_src_images, 
                                                             generated_image=pred_rot_tgt['heatmaps'].detach())
 
-            loss_disc = discriminator_no_rot_out['loss'].mean() + augmneted_attention * discriminator_rot_out['loss'].mean()
+            loss_disc = discriminator_no_rot_out['loss'].mean() + geom_attention * discriminator_rot_out['loss'].mean()
             loss_disc.backward()
 
             optimizer_discriminator.step()

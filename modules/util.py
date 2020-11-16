@@ -521,14 +521,20 @@ class DecoderV2(nn.Module):
         out = self.final_conv(out)
         return out
 
+# def batch_kp_rotation(kps, angle):
+#     angle = torch.tensor(angle * math.pi / 180.)
+#     rot_matrix = torch.tensor([[torch.cos(angle), torch.sin(angle)],
+#                                [-1.*torch.sin(angle), torch.cos(angle)]]).cuda()
+#     center = kps.mean(1).unsqueeze(1)
+#     rot_kps = torch.matmul(kps - center, rot_matrix.t())
+#     return rot_kps + center
+
 def batch_kp_rotation(kps, angle):
     angle = torch.tensor(angle * math.pi / 180.)
     rot_matrix = torch.tensor([[torch.cos(angle), torch.sin(angle)],
                                [-1.*torch.sin(angle), torch.cos(angle)]]).cuda()
-    center = kps.mean(1).unsqueeze(1)
-    rot_kps = torch.matmul(kps - center, rot_matrix.t())
-    return rot_kps + center
-
+    rot_kps = torch.matmul(kps, rot_matrix.t())
+    return rot_kps 
 
 
 def batch_image_rotation(imgs, angle):

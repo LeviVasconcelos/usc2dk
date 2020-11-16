@@ -24,14 +24,16 @@ class KPDetectorTrainer(nn.Module):
         self.detector = kp_detector
         self.heatmap_res = self.detector.heatmap_res
 
-    def forward(self, images, ground_truth, mask=None, kp_map=None):
+    def forward(self, images, ground_truth, mask=None, kp_map=None, kp_loss=True):
         dict_out = self.detector(images)
-        #print(f"dict_out[heatmaps] {dict_out['heatmaps'].shape}")
         
         #loss = masked_l2_loss(keypoints, ground_truth, mask)
         gt = ground_truth if kp_map is None else ground_truth[:, kp_map]
-        #loss = masked_l2_loss(dict_out['heatmaps'], gt, mask)
-        loss = masked_l2_heatmap_loss(dict_out['heatmaps'], gt.detach(), mask)
+        
+        if kp_loss:
+            loss = masked_l2_loss(dict_out['value'], gt.detach(), mask)
+        else:
+            loss = masked_l2_heatmap_loss(dict_out['heatmaps'], gt.detach(), mask)
         kps = unnorm_kp(dict_out['value'])
         #print('heatmap size: ', dict_out['heatmaps'].shape)
         #print('kp out: ', dict_out['value'])
@@ -41,7 +43,7 @@ class KPDetectorTrainer(nn.Module):
                 "l2_loss": loss.mean(),
                 }
         
-def eval_model(model, tgt_batch, heatmap_res=122, hm_var=0.15):
+def eval_model(model, tgt_batch, heatmap_res=122, hm_var=0.15, kp_loss=True):
     model.eval()
     images = tgt_batch['imgs']
     annots = tgt_batch['annots']
@@ -49,7 +51,11 @@ def eval_model(model, tgt_batch, heatmap_res=122, hm_var=0.15):
     mask = None if 'kp_mask' not in tgt_batch.keys() else tgt_batch['kp_mask']
     out = None
     with torch.no_grad():
-        out = model(images, gt_heatmaps, mask)
+        if kp_loss:
+            out = model(images, annots, mask, kp_loss)
+        else:
+            out = model(images, gt_heatmaps, mask, kp_loss)
+
         #out = model(images, annots, mask)
     model.train()
     return out
@@ -97,6 +103,8 @@ def train_kpdetector(model_kp_detector,
         return
 
     heatmap_var = train_params['heatmap_var']
+    kp_loss = train_params["kp_loss"]
+    print(f"kp_loss {kp_loss}")
 
     for epoch in range(logger.epoch, train_params['num_epochs']):
         results = evaluate(model_kp_detector, loader_tgt, dset=train_params['dataset'])
@@ -123,8 +131,10 @@ def train_kpdetector(model_kp_detector,
             #print(f"b_mask {mask}")
             #print(f"mask {mask.shape}")
             ##################
-            #kp_detector_out = kp_detector(images, annots, mask)
-            kp_detector_out = kp_detector(images, gt_heatmaps, mask)
+            if kp_loss:
+                kp_detector_out = kp_detector(images, annots, mask, kp_loss=kp_loss)
+            else:
+                kp_detector_out = kp_detector(images, gt_heatmaps, mask, kp_loss=kp_loss)
 
             loss = kp_detector_out['l2_loss'].mean()
             loss.backward()
@@ -134,7 +144,7 @@ def train_kpdetector(model_kp_detector,
             ####### LOG VALIDATION
             if i % log_params['eval_frequency'] == 0:
                 tgt_batch = next(iter(loader_tgt))
-                eval_out = eval_model(kp_detector, tgt_batch, model_kp_detector.heatmap_res, heatmap_var)
+                eval_out = eval_model(kp_detector, tgt_batch, model_kp_detector.heatmap_res, heatmap_var, kp_loss)
                 eval_sz = int(len(loader)/log_params['eval_frequency'])
                 it_number = epoch * eval_sz  + (logger.iterations/log_params['eval_frequency'])
                 logger.add_scalar('Eval loss', eval_out['l2_loss'].mean(), it_number)

@@ -19,7 +19,7 @@ from datasets.couple_loader import LoadCoupledDatasets
 from datasets.unaligned_loader import LoadUnalignedH36m 
 from datasets.lsp import LoadLsp
 from datasets.annot_converter import HUMANS_TO_LSP, HUMANS_TO_MPII 
-from datasets.annot_converter import HUMANS_TO_PENN, MPII_TO_HUMANS
+from datasets.annot_converter import HUMANS_TO_PENN, MPII_TO_HUMANS, MPII_TO_PENN
 
 from kp_disc_geo import train_generator_geo
 
@@ -35,7 +35,7 @@ if __name__ == "__main__":
     parser.add_argument("--device_ids", default="0", 
                          type=lambda x: list(map(int, x.split(','))), 
                          help="Names of the devices comma separated.")
-    parser.add_argument('--epochs', default=100, help="number of epochs")
+    parser.add_argument('--epochs', default=50, help="number of epochs")
     parser.add_argument("--tgt", default='lsp')
     parser.add_argument("--geo", default=1, help="geo loss")
     parser.add_argument("--gamma", default=800, help="gamma")
@@ -70,7 +70,7 @@ if __name__ == "__main__":
     if not os.path.exists(os.path.join(log_dir, os.path.basename(opt.config))):
         copy(opt.config, log_dir)
 
-    logger = Logger(log_dir, save_frequency=5)
+    logger = Logger(log_dir, save_frequency=25)
 
     ##### Model instantiation
     model_kp_detector = KPDetector(**config['model_params']['kp_detector_params']) 
@@ -104,7 +104,7 @@ if __name__ == "__main__":
     if opt.tgt == 'penn':
         loader_tgt = LoadPennAction(**config['datasets']['penn_train']) 
         loader_test = LoadPennAction(**config['datasets']['penn_test'])
-        kp_map = HUMANS_TO_PENN
+        kp_map = MPII_TO_PENN #HUMANS_TO_PENN
     elif opt.tgt == 'mpii':
         loader_tgt = LoadMpii(**config['datasets']['mpii_train']) 
         loader_test = LoadMpii(**config['datasets']['mpii_eval'])

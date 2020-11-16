@@ -25,7 +25,7 @@ from datasets.mpii_loader import LoadMpii
 from datasets.couple_loader import LoadCoupledDatasets
 from datasets.unaligned_loader import LoadUnalignedH36m 
 from datasets.lsp import LoadLsp
-from datasets.annot_converter import HUMANS_TO_LSP, HUMANS_TO_MPII, HUMANS_TO_PENN, MPII_TO_HUMANS
+from datasets.annot_converter import HUMANS_TO_LSP, HUMANS_TO_MPII, HUMANS_TO_PENN, MPII_TO_HUMANS, MPII_TO_PENN
 from modules.util import kp2gaussian2
 from kp_disc_geo import train_generator_geo
 
@@ -113,7 +113,6 @@ if __name__ == "__main__":
     parser.add_argument("--config", required=True, help="path to config file")
     parser.add_argument("--checkpoint", default=None, help="path to checkpoint")
     parser.add_argument("--log_dir", default="", help="path to log dir")
-    parser.add_argument("--src_model", required=True, help="Model to adapt")
     parser.add_argument("--device_ids", default="0", 
                          type=lambda x: list(map(int, x.split(','))), 
                          help="Names of the devices comma separated.")
@@ -126,19 +125,20 @@ if __name__ == "__main__":
     ##### Model instantiation
     model_kp_detector = KPDetector(**config['model_params']['kp_detector_params']) 
     model_kp_detector.to(opt.device_ids[0]) 
-    kp_state_dict = torch.load(opt.src_model)
+#    kp_state_dict = torch.load(opt.src_model)
 
     if opt.src_model != 'scratch':
         try:
             print(f"loading {opt.src_model}")
             kp_state_dict = torch.load(opt.src_model)
-
             print('Source model loaded: %s' % opt.src_model)
         except:
             print('Failed to read model %s' % opt.src_model)
             exit(1)
+        model_kp_detector.load_state_dict(kp_state_dict['model_kp_detector'])
+
         try:
-            model_kp_detector.load_state_dict(kp_state_dict['model_kp_detector'])
+            print("t")
         except:
             print('failed to load model weights')
             exit(1)
@@ -150,7 +150,7 @@ if __name__ == "__main__":
     config['train_params']['dataset'] = opt.tgt
     if opt.tgt == 'penn':
         loader_test = LoadPennAction(**config['datasets']['penn_test'])
-        kp_map = HUMANS_TO_PENN
+        kp_map = MPII_TO_PENN #HUMANS_TO_PENN
     elif opt.tgt == 'mpii':
         loader_test = LoadMpii(**config['datasets']['mpii_eval'])
         kp_map = HUMANS_TO_MPII

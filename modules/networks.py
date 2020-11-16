@@ -18,6 +18,7 @@ class KPDetector(nn.Module):
                  single_jacobian_map=False, pad=0):
         super(KPDetector, self).__init__()
 
+        print(f"n_kp : {num_kp}")
         self.predictor = Hourglass(block_expansion, in_features=num_channels,
                                    max_features=max_features, num_blocks=num_blocks)
 
@@ -46,7 +47,7 @@ class KPDetector(nn.Module):
         """
         shape = heatmap.shape
         heatmap = heatmap.unsqueeze(-1)
-        grid = make_coordinate_grid(shape[2:], heatmap.type()).unsqueeze_(0).unsqueeze_(0)
+        grid = make_coordinate_grid(shape[2:], heatmap.type()).unsqueeze_(0).unsqueeze_(0).to(heatmap.device)
         value = (heatmap * grid).sum(dim=(2, 3))
         kp = {'value': value}
 

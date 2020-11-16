@@ -269,7 +269,7 @@ def batch_kp_affine(kps, matrices, inverse=False):
             rot_kps = norm_kp(rot_kps)
 
             
-        ones = torch.zeros(15).unsqueeze(1) +1
+        ones = torch.zeros(16).unsqueeze(1) +1
         rot_kps = torch.cat((rot_kps, ones.cuda() ),dim=-1)
         rot_kps = torch.matmul(rot_kps, matrix.t().cuda()) 
 
