@@ -46,9 +46,9 @@ def batch_mpii(data):
             "kp_mask": pack('joints_3d_vis').unsqueeze(-1).type(torch.FloatTensor),
             }
 
-def LoadMpii(root_dir, train=True, batch_size=16, workers=12):
+def LoadMpii(root_dir, train=True, batch_size=16, workers=12, nsamples=10000):
     img_set = "train" if train else "valid"
-    dataset = MPIIDataset(root_dir, img_set=img_set) 
+    dataset = MPIIDataset(root_dir, nsamples, img_set=img_set) 
     return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=workers, pin_memory=False, collate_fn=batch_mpii,drop_last=True)
    
     
@@ -58,7 +58,7 @@ class MPIIDataset(data.Dataset):
     frames/video_number/000x.png
     labels/video_number.mat
     """
-    def __init__(self, root_dir, img_set="train"):
+    def __init__(self, root_dir, nsamples,  img_set="train"):
         self.root_dir = os.path.expanduser(root_dir)
         self.image_set = img_set
         self.samples = list()
@@ -68,7 +68,7 @@ class MPIIDataset(data.Dataset):
         self.num_joints = 16
 
         self.samples = self.make_dataset()
-        self.samples = self.samples[:200000]
+        self.samples = self.samples[:nsamples]
 
         print('Loading MPIIDataset: %s split: %s' % (self.root_dir, self.image_set))
 

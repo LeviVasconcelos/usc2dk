@@ -25,18 +25,20 @@ class CoupledDataset(data.Dataset):
         self.target = target
 
         self.source_order = np.array([x for x in range(0, len(self.source))])
+        self.target_order = np.array([x for x in range(0, len(self.target))])
 
     def shuffle(self):
         np.random.shuffle(self.source_order)
+        np.random.shuffle(self.target_order)
 
     def __getitem__(self, i):
         j = self.source_order[i % len(self.source)]
-        k = i % len(self.target)
+        k = self.target_order[i % len(self.target)]
         source_item = self.source.__getitem__(j)
         target_item = self.target.__getitem__(k)
         return (source_item, target_item)
 
     def __len__(self):
-        return len(self.target)
+        return min(len(self.source), len(self.target))
 
 

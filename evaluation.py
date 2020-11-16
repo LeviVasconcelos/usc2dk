@@ -29,7 +29,12 @@ def batch_PCK(predicted_kp_, source_gt_, dset='mpii', threshold_=0.5, mask=None)
     threshold['mpii'] = 0.5
     threshold['lsp'] = 0.5
     threshold['humans']= 0.5
- 
+    
+    if 'mpii' in dset:
+        dset = 'mpii'
+    if 'h36m' in dset:
+        dset = 'humans'
+
     predicted_kp = unnorm_kp(predicted_kp_)
     source_gt = unnorm_kp(source_gt_)
     metric = (source_gt[:, pck_joints[dset][0], :] - source_gt[:, pck_joints[dset][1], :]).norm(dim=1).unsqueeze(-1)
