@@ -18,6 +18,7 @@ from tqdm import tqdm
 import yaml
 from logger import Visualizer
 from PIL import Image, ImageDraw
+import copy
 
 class KPDetectorTrainer(nn.Module):
     def __init__(self, kp_detector, train_params, 
@@ -126,6 +127,30 @@ class DiscriminatorTrainer(nn.Module):
                 }
         
 
+def d_unrolled_loop(d_gen_input=None, real_data=None,optimizer_discriminator=None, gen=None,kp_map=None, discriminator=None, train_params=None):
+    
+    optimizer_discriminator.zero_grad()
+    with torch.no_grad():
+        fake_data = gen.adapt(d_gen_input,kp_map)
+        
+    
+    gt_maps = discriminator(real_data)
+    generated_maps = discriminator(fake_data['heatmaps'].detach())
+    disc_loss = [] 
+    for i in range(len(gt_maps)):
+        generated_map = generated_maps[i]
+        gt_map = gt_maps[i]
+        disc_loss.append(discriminator_gan_loss(discriminator_maps_generated=generated_map,
+                                    discriminator_maps_real=gt_map,
+                                    weight=train_params['loss_weights']['discriminator_gan']).mean())
+    out_disc = { 'loss': (sum(disc_loss) / len(disc_loss)),
+                  'scales': disc_loss, }
+
+    loss_disc = out_disc['loss'].mean() 
+    loss_disc.backward(create_graph=True)
+
+    optimizer_discriminator.step()
+    optimizer_discriminator.zero_grad()
 
 def train_kpdetector(model_kp_detector,
                        loaders,
@@ -170,7 +195,9 @@ def train_kpdetector(model_kp_detector,
                                     geo_transform=geo_transform)
     if train_params['use_gan']:
         discriminator = DiscriminatorTrainer(model_discriminator, train_params)
-
+    # number of unrolled steps to do, if 0 no unrolling, usually 5 or 10
+    unrolled_steps = train_params["unrolled_steps"] 
+    print(f"unrolled_steps {unrolled_steps}")
     k = 0
     if train_params['test'] == True:
         results = evaluate(model_kp_detector, loader_tgt, dset=train_params['dataset'])
@@ -207,6 +234,17 @@ def train_kpdetector(model_kp_detector,
             src_annots = src_batch['annots'].cuda()
             src_annots_hm = kp2gaussian2(src_annots, heatmap_size, heatmap_var)
             mask = None if 'kp_mask' not in src_batch.keys() else src_batch['kp_mask']
+            
+            ## code adapted from https://github.com/andrewliao11/unrolled-gans
+            ## Unroll the discriminator here making a deep copy
+            if train_params['use_gan'] and unrolled_steps > 0:
+                backup = copy.deepcopy(discriminator.state_dict())
+                for iterat in range(unrolled_steps):
+                    # unrolled loop for non rotated frames
+                    kp_detector.detector.set_domain_all(source=False)
+                    d_unrolled_loop(d_gen_input=tgt_images, real_data=src_annots_hm[:, kp_map].detach(),optimizer_discriminator=optimizer_discriminator, gen=kp_detector, kp_map=kp_map, discriminator=model_discriminator, train_params=train_params)
+                    kp_detector.detector.set_domain_all(source=True)
+
             kp_detector_src_out = kp_detector(src_images, src_annots, mask)
             kp_detector_tgt_out = kp_detector.adapt(tgt_images, kp_map)
 
@@ -230,6 +268,11 @@ def train_kpdetector(model_kp_detector,
 
             optimizer_kp_detector.step()
             optimizer_kp_detector.zero_grad()
+
+            # reload discriminator model
+            if unrolled_steps > 0:
+                discriminator.load_state_dict(backup)
+
             disc_loss_value = 0
             if train_params['use_gan']:
                 disc_out = discriminator(src_annots_hm[:, kp_map].detach(), 
