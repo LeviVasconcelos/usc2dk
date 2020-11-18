@@ -26,7 +26,8 @@ class KPDetectorTrainer(nn.Module):
                        discriminator=None, 
                        geo_transform=None,
                        kp_to_skl=None, 
-                       angle_equivariance=False):
+                       angle_equivariance=False, 
+                       device="cuda"):
         super(KPDetectorTrainer, self).__init__()
         self.detector = kp_detector
         self.detector.convert_bn_to_dial(self.detector)
@@ -41,6 +42,7 @@ class KPDetectorTrainer(nn.Module):
         self.geo_f = torch.nn.MSELoss()
         self.angle_range = 45
         self.angle_incr_factor = 2
+        self.device = device
 
 
 
