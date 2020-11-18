@@ -35,7 +35,7 @@ if __name__ == "__main__":
     parser.add_argument("--device_ids", default="0", 
                          type=lambda x: list(map(int, x.split(','))), 
                          help="Names of the devices comma separated.")
-    parser.add_argument('--epochs', default=50, help="number of epochs")
+    parser.add_argument('--epochs', default=100, help="number of epochs")
     parser.add_argument("--tgt", default='lsp')
     parser.add_argument("--geo", default=1, help="geo loss")
     parser.add_argument("--gamma", default=800, help="gamma")
@@ -44,7 +44,7 @@ if __name__ == "__main__":
 
     with open(opt.config) as f:
         config = yaml.load(f)
-    config['train_params']['loss_weights']['geometric'] = float(opt.geo)
+    #config['train_params']['loss_weights']['geometric'] = float(opt.geo)
     config['train_params']['num_epochs'] = int(opt.epochs)
     config['model_params']['KTS_params']['edges'] = opt.tgt
     config['model_params']['KTS_params']['gamma'] = float(opt.gamma)

@@ -49,14 +49,14 @@ datasets:
   h36m_resized_simplified_train:
     subjects: [0,1,2,3,4]
     rgb: True
-    nImages: 3000
+    nImages: 4000
     nViews: 4
     batch_size: 4 
     img_size: 128
     workers: 12 
     process_batch: True
     root_dir: '/data/rfranceschini/workspace/h36m-fetch/video_processed_simplified' 
-    kp_list: [0, 1, 2, 3, 6, 7, 8, 13, 14, 17, 18, 19, 25, 26, 27] #[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31] 
+    kp_list: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31] 
   h36m_resized_crop_protocol2_train:
     subjects: [0,1,2,3,4]
     rgb: True
@@ -123,6 +123,7 @@ train_params:
   clip_grad_norm: True
   max_grad_norm: 1.0
   detach_discriminator: False 
+  kp_loss: True
   heatmap_var: 0.15
   loss_weights:
     discriminator_gan: 1 
@@ -197,7 +198,7 @@ model_params:
     max_features: 1024
     num_blocks: 5
     scale_factor: 1 
-    num_kp: 32 
+    num_kp: 16 #32 
     num_channels: 3
   generator_params:
     encoder_in_features: 3

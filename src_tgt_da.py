@@ -15,11 +15,12 @@ from datasets.annot_converter import HUMANS_TO_HUMANS
 from torch.optim.lr_scheduler import MultiStepLR
 from tqdm import tqdm
 import yaml
+import random
 from logger import Visualizer
 from PIL import Image, ImageDraw
 
 class KPDetectorTrainer(nn.Module):
-    def __init__(self, kp_detector, geo_transform=None, angle_equivariance=False):
+    def __init__(self, kp_detector, geo_transform=None, angle_equivariance=False, device="cude"):
         super(KPDetectorTrainer, self).__init__()
         self.detector = kp_detector
         self.detector.convert_bn_to_dial(self.detector)
@@ -27,6 +28,8 @@ class KPDetectorTrainer(nn.Module):
         self.geo_transform = geo_transform
         self.angle_equivariance = angle_equivariance
         self.geo_f = torch.nn.MSELoss()
+        self.epoch_ratio = 0
+        self.device = device
 
 
     def forward(self, images, ground_truth, mask=None, kp_map=None):
@@ -38,12 +41,13 @@ class KPDetectorTrainer(nn.Module):
         heatmaps = dict_out['heatmaps'][:, kp_map] if kp_map is not None else dict_out['heatmaps']
         geo_loss = 0
         if self.geo_transform is not None:
-            angle = 90
+            range_angle = int(45 * self.epoch_ratio)
+            angle = random.randint(-1*range_angle,range_angle)
             geo_images = self.geo_transform(images, angle)
             geo_dict_out = self.detector(geo_images)
             geo_heatmaps = geo_dict_out['heatmaps'] if kp_map is None else geo_dict_out['heatmaps'][:, kp_map]
             if self.angle_equivariance:
-                geo_loss = self.angle_difference(dict_out['value'],geo_dict_out['value'], angle)
+                geo_loss = self.angle_difference(dict_out['value'],geo_dict_out['value'], angle, device=self.device)
             else:   
                 geo_loss = self.equivariance_loss(heatmaps, geo_heatmaps, angle)
 
@@ -61,17 +65,10 @@ class KPDetectorTrainer(nn.Module):
         return forward + backward
     
     def angle_difference(self,kps,rot_kps,gt_angle, device="cuda"):
-    
-       # v0 =  -1* rot_kps
-       # v1 = -1*  kps
-
-        # stack = torch.stack([rot_kps,kps], 2)
-        # det =  torch.det(stack)
-        # dot = torch.sum(rot_kps*kps, dim=2)
 
         angle = torch.atan2(torch.det(torch.stack([rot_kps,kps], 2)),torch.sum(rot_kps*kps, dim=2))
         gt_angle = torch.tensor(gt_angle).type(torch.FloatTensor)
-        gt_angle = gt_angle.cuda()
+        gt_angle = gt_angle.to(device)
         angle = (angle*180/np.pi).mean()
         return self.geo_f(angle,gt_angle)
 
@@ -82,12 +79,13 @@ class KPDetectorTrainer(nn.Module):
         heatmaps = dict_out['heatmaps'][:, kp_map]
         geo_loss = 0
         if self.geo_transform is not None:
-            angle = 90
+            range_angle = int(45 * self.epoch_ratio)
+            angle = random.randint(-1*range_angle,range_angle)
             geo_images = self.geo_transform(images, angle)
             geo_dict_out = self.detector(geo_images)
             geo_heatmaps = geo_dict_out['heatmaps'][:, kp_map]
             if self.angle_equivariance:
-                geo_loss = self.angle_difference(kps,geo_dict_out['value'][:,kp_map], angle)
+                geo_loss = self.angle_difference(kps,geo_dict_out['value'][:,kp_map], angle, device=self.device)
             else:    
                 geo_loss = self.equivariance_loss(heatmaps, geo_heatmaps, angle)
         kps = unnorm_kp(kps)
@@ -121,10 +119,12 @@ def train_kpdetector(model_kp_detector,
         logger.epoch = resume_epoch
         logger.iterations = resume_iteration
 
+    print(f"angle_equivariance {train_params['angle_equivariance']}")
+
     scheduler_kp_detector = MultiStepLR(optimizer_kp_detector, 
                                        train_params['epoch_milestones'], 
                                        gamma=0.1, last_epoch=logger.epoch-1)
-    kp_detector = KPDetectorTrainer(model_kp_detector, batch_image_rotation, angle_equivariance=train_params['angle_equivariance'])
+    kp_detector = KPDetectorTrainer(model_kp_detector, batch_image_rotation, angle_equivariance=train_params['angle_equivariance'], device=device_ids)
     #kp_detector = DataParallelWithCallback(kp_detector, device_ids=device_ids)
     k = 0
     if train_params['test'] == True:
@@ -137,11 +137,12 @@ def train_kpdetector(model_kp_detector,
     loader_src_train, loader_src_test, loader_tgt = loaders
     iterator_source = iter(loader_src_train)
     for epoch in range(logger.epoch, train_params['num_epochs']):
+        kp_detector.epoch_ratio = epoch/train_params["num_epochs"]
         kp_detector.detector.set_domain_all(source=False)
-        results_tgt = evaluate(kp_detector.detector, loader_tgt, dset=train_params['tgt_train'], filter=kp_map)
+        results_tgt = evaluate(kp_detector.detector, loader_tgt, dset=train_params['tgt_train'], filter=kp_map, device=device_ids)
         kp_detector.detector.set_domain_all(source=True)
-        results_src_test = evaluate(kp_detector.detector, loader_src_test, dset=train_params['src_test']) 
-        results_src_train = evaluate(kp_detector.detector, loader_src_train, dset=train_params['src_train'])
+        results_src_test = evaluate(kp_detector.detector, loader_src_test, dset=train_params['src_test'], device=device_ids) 
+        results_src_train = evaluate(kp_detector.detector, loader_src_train, dset=train_params['src_train'], device=device_ids)
         print('Epoch ' + str(epoch)+ ' PCK_target: ' + str(results_tgt['PCK']))
         logger.add_scalar('MSE target', results_tgt['MSE'], epoch)
         logger.add_scalar('PCK target', results_tgt['PCK'], epoch)
@@ -151,15 +152,15 @@ def train_kpdetector(model_kp_detector,
         logger.add_scalar('PCK src test', results_src_test['PCK'], epoch)
    
         for i, tgt_batch  in enumerate(tqdm(loader_tgt)):
-            tgt_images = tgt_batch['imgs'].cuda()
-            tgt_annots = tgt_batch['annots'].cuda()
+            tgt_images = tgt_batch['imgs'].to(device_ids)
+            tgt_annots = tgt_batch['annots'].to(device_ids)
             try:
                 src_batch = next(iterator_source)
             except:
                 iterator_source = iter(loader_src_train)
                 src_batch = next(iterator_source)
-            src_images = src_batch['imgs'].cuda()
-            src_annots = src_batch['annots'].cuda()
+            src_images = src_batch['imgs'].to(device_ids)
+            src_annots = src_batch['annots'].to(device_ids)
 
             mask = None if 'kp_mask' not in src_batch.keys() else src_batch['kp_mask']
             kp_detector_src_out = kp_detector(src_images, src_annots, mask)
@@ -169,12 +170,9 @@ def train_kpdetector(model_kp_detector,
             geo_loss = train_params['loss_weights']['geometric'] * \
                        (kp_detector_tgt_out['geo_loss'] + kp_detector_src_out['geo_loss'])
             src_loss = kp_detector_src_out['l2_loss'].mean() 
-            if epoch < 3:
-                loss = src_loss
-                loss.backward()
-            else:              
-                loss = geo_loss + src_loss
-                loss.backward() 
+        
+            loss = geo_loss + src_loss
+            loss.backward() 
 
 
             optimizer_kp_detector.step()

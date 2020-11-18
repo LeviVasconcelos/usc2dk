@@ -22,7 +22,7 @@ if __name__ == "__main__":
     parser.add_argument("--config", required=True, help="path to config file")
     parser.add_argument("--checkpoint", default=None, help="path to checkpoint")
     parser.add_argument("--log_dir", default="", help="path to log dir")
-    parser.add_argument("--device_ids", default="0", 
+    parser.add_argument("--device_ids", default="1", 
                          type=lambda x: list(map(int, x.split(','))), 
                          help="Names of the devices comma separated.")
     parser.add_argument("--src_dataset", default="h36m", type=str, help="which dataset to use for training. [h36m | penn]")
@@ -33,6 +33,8 @@ if __name__ == "__main__":
 
     with open(opt.config) as f:
         config = yaml.load(f)
+
+    print(f"device {opt.device_ids[0]}")
 
     if opt.checkpoint is not None:
         log_dir = os.path.join(*os.path.split(opt.checkpoint)[:-1])
@@ -74,9 +76,10 @@ if __name__ == "__main__":
 
     kp_map = MapH36mTo[opt.tgt_dataset]
 
+
     train_kpdetector(model_kp_detector,
                        loaders,
                        train_params,
                        opt.checkpoint,
-                       logger, opt.device_ids, kp_map)
+                       logger, opt.device_ids[0], kp_map)
  

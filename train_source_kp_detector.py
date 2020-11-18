@@ -63,7 +63,7 @@ if __name__ == "__main__":
     elif opt.dataset == "mpii":
         config['model_params']['kp_detector_params']['num_kp'] = 16
     elif opt.dataset == "humans":
-        config['model_params']['kp_detector_params']['num_kp'] = 15
+        config['model_params']['kp_detector_params']['num_kp'] = 32
 
     kp_map = None
     if opt.tgt_model == "mpii":
