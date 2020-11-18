@@ -19,6 +19,7 @@ import yaml
 from logger import Visualizer
 from PIL import Image, ImageDraw
 import copy
+import random
 
 class KPDetectorTrainer(nn.Module):
     def __init__(self, kp_detector, train_params, 
@@ -201,7 +202,8 @@ def train_kpdetector(model_kp_detector,
         discriminator = DiscriminatorTrainer(model_discriminator, train_params)
     # number of unrolled steps to do, if 0 no unrolling, usually 5 or 10
     unrolled_steps = train_params["unrolled_steps"] 
-    print(f"unrolled_steps {unrolled_steps}")
+    print(f"unrolled_steps: {unrolled_steps}, rotation: {train_params['use_rotation']}")
+
     k = 0
     if train_params['test'] == True:
         results = evaluate(model_kp_detector, loader_tgt, dset=train_params['dataset'])
