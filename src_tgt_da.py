@@ -34,6 +34,8 @@ class KPDetectorTrainer(nn.Module):
         self.train_params = train_params
         self.loss_weights = self.train_params['loss_weights']
         self.to_skeleton = kp_to_skl
+        self.epoch_ratio = 0
+
 
 
     def forward(self, images, ground_truth, mask=None, kp_map=None):
@@ -52,7 +54,8 @@ class KPDetectorTrainer(nn.Module):
         heatmaps = dict_out['heatmaps'][:, kp_map] if kp_map is not None else dict_out['heatmaps']
         geo_loss = 0
         if self.geo_transform is not None:
-            angle = 90
+            range_angle = int(45 * self.epoch_ratio)
+            angle = random.randint(-1*range_angle,range_angle)
             geo_images = self.geo_transform(images, angle).detach()
             geo_dict_out = self.detector(geo_images)
             geo_heatmaps = geo_dict_out['heatmaps'] if kp_map is None else geo_dict_out['heatmaps'][:, kp_map]
@@ -81,7 +84,8 @@ class KPDetectorTrainer(nn.Module):
         geo_dict_out = None
         geo_images = None
         if self.geo_transform is not None:
-            angle = 90
+            range_angle = int(45 * self.epoch_ratio)
+            angle = random.randint(-1*range_angle,range_angle)
             geo_images = self.geo_transform(images, angle).detach()
             geo_dict_out = self.detector(geo_images)
             geo_heatmaps = geo_dict_out['heatmaps'][:, kp_map]
@@ -209,6 +213,7 @@ def train_kpdetector(model_kp_detector,
     loader_src_train, loader_src_test, loader_tgt = loaders
     iterator_source = iter(loader_src_train)
     for epoch in range(logger.epoch, train_params['num_epochs']):
+        kp_detector.epoch_ratio = epoch/train_params["num_epochs"]
         kp_detector.detector.set_domain_all(source=False)
         results_tgt = evaluate(kp_detector.detector, loader_tgt, dset=train_params['tgt_train'], filter=kp_map)
         kp_detector.detector.set_domain_all(source=True)
