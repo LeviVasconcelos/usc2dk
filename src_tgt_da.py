@@ -9,6 +9,7 @@ from matplotlib import pyplot as plt
 from evaluation import evaluate
 from sync_batchnorm import DataParallelWithCallback 
 from modules.losses import masked_l2_heatmap_loss, l1_loss, masked_l2_loss 
+from modules.losses import generator_gan_loss, discriminator_gan_loss
 from modules.util import kp2gaussian2, gaussian2kp
 from modules.util import batch_image_rotation, batch_kp_rotation 
 from datasets.annot_converter import HUMANS_TO_HUMANS
@@ -19,25 +20,39 @@ from logger import Visualizer
 from PIL import Image, ImageDraw
 
 class KPDetectorTrainer(nn.Module):
-    def __init__(self, kp_detector, geo_transform=None):
+    def __init__(self, kp_detector, train_params, 
+                       discriminator=None, 
+                       geo_transform=None,
+                       kp_to_skl=None):
         super(KPDetectorTrainer, self).__init__()
         self.detector = kp_detector
         self.detector.convert_bn_to_dial(self.detector)
+        self.discriminator = discriminator
         self.heatmap_res = self.detector.heatmap_res
         self.geo_transform = geo_transform
+        self.train_params = train_params
+        self.loss_weights = self.train_params['loss_weights']
+        self.to_skeleton = kp_to_skl
 
 
     def forward(self, images, ground_truth, mask=None, kp_map=None):
         self.detector.set_domain_all(source=True)
         dict_out = self.detector(images)
         gt = ground_truth if kp_map is None else ground_truth[:, kp_map]
-        loss = masked_l2_loss(dict_out['value'], gt, mask)
-        #loss = masked_l2_heatmap_loss(dict_out['heatmaps'], gt.detach(), mask)
+        src_loss = 0
+        if self.train_params['source_loss'] == 'kp_values':
+            src_loss = masked_l2_loss(dict_out['value'], gt, mask)
+        elif self.train_params['source_loss'] == 'heatmap':
+            size = (self.heatmap_res, self.heatmap_res)
+            variance = self.train_params['heatmap_var']
+            gt_heatmaps = kp2gaussian2(gt, size, variance).detach()
+            src_loss = masked_l2_heatmap_loss(dict_out['heatmaps'], 
+                                               gt_heatmaps, mask)
         heatmaps = dict_out['heatmaps'][:, kp_map] if kp_map is not None else dict_out['heatmaps']
         geo_loss = 0
         if self.geo_transform is not None:
             angle = 90
-            geo_images = self.geo_transform(images, angle)
+            geo_images = self.geo_transform(images, angle).detach()
             geo_dict_out = self.detector(geo_images)
             geo_heatmaps = geo_dict_out['heatmaps'] if kp_map is None else geo_dict_out['heatmaps'][:, kp_map]
             geo_loss = self.equivariance_loss(heatmaps, geo_heatmaps, angle)
@@ -45,7 +60,7 @@ class KPDetectorTrainer(nn.Module):
         kps = unnorm_kp(dict_out['value'])
         return {"keypoints": kps,
                 "heatmaps": dict_out['heatmaps'],
-                "l2_loss": loss.mean(),
+                "src_loss": src_loss.mean(),
                 "geo_loss": geo_loss,
                 }
     def equivariance_loss(self, source, transformed, geo_param):
@@ -62,31 +77,81 @@ class KPDetectorTrainer(nn.Module):
         kps = unnorm_kp(kps)
         heatmaps = dict_out['heatmaps'][:, kp_map]
         geo_loss = 0
+        geo_dict_out = None
+        geo_images = None
         if self.geo_transform is not None:
             angle = 90
-            geo_images = self.geo_transform(images, angle)
+            geo_images = self.geo_transform(images, angle).detach()
             geo_dict_out = self.detector(geo_images)
             geo_heatmaps = geo_dict_out['heatmaps'][:, kp_map]
             geo_loss = self.equivariance_loss(heatmaps, geo_heatmaps, angle)
+        generator_loss = 0
+        if self.discriminator is not None:
+            generator_scores = []
+            maps = self.discriminator(heatmaps)
+            for i, gen_map in enumerate(maps):
+                gen_scores = generator_gan_loss(gen_map, 
+                                           self.loss_weights['generator_gan']).mean()
+                generator_scores.append(gen_scores)
+            generator_loss = sum(generator_scores) / len(generator_scores)
 
         return {"keypoints": kps,
                 "heatmaps": heatmaps,
                 "geo_loss": geo_loss,
                 "geo_out": geo_dict_out,
                 "geo_images": geo_images,
+                "generator_loss": generator_loss,
+                }
+
+class DiscriminatorTrainer(nn.Module):
+    def __init__(self, discriminator, train_params):
+        super(DiscriminatorTrainer, self).__init__()
+        self.discriminator = discriminator
+        self.loss_weights = train_params['loss_weights']
+
+    def forward(self, gt_images, generated_images):
+        gt_maps = self.discriminator(gt_images.detach())
+        gen_maps = self.discriminator(generated_images.detach())
+        disc_loss = []
+        for i in range(len(gt_maps)):
+            gen_map = gen_maps[i]
+            gt_map = gt_maps[i]
+            disc_loss.append(discriminator_gan_loss(
+                               discriminator_maps_generated=gen_map,
+                               discriminator_maps_real=gt_map,
+                               weight=self.loss_weights['discriminator_gan']).mean())
+        return {
+                'loss': (sum(disc_loss) / len(disc_loss)),
+                'scales': disc_loss,
                 }
         
+
+
 def train_kpdetector(model_kp_detector,
                        loaders,
                        train_params,
                        checkpoint,
-                       logger, device_ids, kp_map=None):
+                       logger, device_ids, model_discriminator=None,
+                       kp_map=None):
     log_params = train_params['log_params']
+    resume_epoch = 0
+    resume_iteration = 0
     optimizer_kp_detector = torch.optim.Adam(model_kp_detector.parameters(),
                                             lr=train_params['lr'],
                                             betas=train_params['betas'])
-    resume_epoch = 0
-    resume_iteration = 0
+    scheduler_kp_detector = MultiStepLR(optimizer_kp_detector, 
+                                       train_params['epoch_milestones'], 
+                                       gamma=0.1, last_epoch=logger.epoch-1)
+
+
+    if model_discriminator is not None:
+        optimizer_discriminator = torch.optim.Adam(model_discriminator.parameters(),
+                                                lr=train_params['lr'],
+                                                betas=train_params['betas'])
+        scheduler_discriminator = MultiStepLR(optimizer_discriminator, 
+                                       train_params['epoch_milestones'], 
+                                       gamma=0.1, last_epoch=logger.epoch-1)
+
     if checkpoint is not None:
         print('Loading Checkpoint: %s' % checkpoint)
         if train_params['test'] == False:
@@ -96,11 +161,16 @@ def train_kpdetector(model_kp_detector,
         logger.epoch = resume_epoch
         logger.iterations = resume_iteration
 
-    scheduler_kp_detector = MultiStepLR(optimizer_kp_detector, 
-                                       train_params['epoch_milestones'], 
-                                       gamma=0.1, last_epoch=logger.epoch-1)
-    kp_detector = KPDetectorTrainer(model_kp_detector, batch_image_rotation)
-    #kp_detector = DataParallelWithCallback(kp_detector, device_ids=device_ids)
+
+    geo_transform = None
+    if train_params['use_rotation']:
+        geo_transform = batch_image_rotation
+    kp_detector = KPDetectorTrainer(model_kp_detector, train_params, 
+                                    discriminator=model_discriminator,
+                                    geo_transform=geo_transform)
+    if train_params['use_gan']:
+        discriminator = DiscriminatorTrainer(model_discriminator, train_params)
+
     k = 0
     if train_params['test'] == True:
         results = evaluate(model_kp_detector, loader_tgt, dset=train_params['dataset'])
@@ -108,7 +178,7 @@ def train_kpdetector(model_kp_detector,
         return
 
     heatmap_var = train_params['heatmap_var']
-
+    heatmap_size = (kp_detector.heatmap_res, kp_detector.heatmap_res)
     loader_src_train, loader_src_test, loader_tgt = loaders
     iterator_source = iter(loader_src_train)
     for epoch in range(logger.epoch, train_params['num_epochs']):
@@ -135,28 +205,57 @@ def train_kpdetector(model_kp_detector,
                 src_batch = next(iterator_source)
             src_images = src_batch['imgs'].cuda()
             src_annots = src_batch['annots'].cuda()
-
+            src_annots_hm = kp2gaussian2(src_annots, heatmap_size, heatmap_var)
             mask = None if 'kp_mask' not in src_batch.keys() else src_batch['kp_mask']
             kp_detector_src_out = kp_detector(src_images, src_annots, mask)
             kp_detector_tgt_out = kp_detector.adapt(tgt_images, kp_map)
-            geo_out = kp_detector_tgt_out['geo_out']
 
-            geo_loss = train_params['loss_weights']['geometric'] * \
+            src_loss = kp_detector_src_out['src_loss'].mean() 
+            geo_loss_value = 0
+            geo_loss = 0
+            if train_params['use_rotation']:
+                geo_out = kp_detector_tgt_out['geo_out']
+                geo_loss = train_params['loss_weights']['geometric'] * \
                        (kp_detector_tgt_out['geo_loss'] + kp_detector_src_out['geo_loss'])
-            src_loss = kp_detector_src_out['l2_loss'].mean() 
-            loss = geo_loss + src_loss
+                geo_loss_value = geo_loss.item()
+
+            gen_loss = 0
+            gen_loss_value = 0
+            if train_params['use_gan']:
+                gen_loss = kp_detector_tgt_out['generator_loss']
+                gen_loss_value = gen_loss.item()
+
+            loss = geo_loss + src_loss + gen_loss
             loss.backward()
 
             optimizer_kp_detector.step()
             optimizer_kp_detector.zero_grad()
+            disc_loss_value = 0
+            if train_params['use_gan']:
+                disc_out = discriminator(src_annots_hm[:, kp_map].detach(), 
+                                         kp_detector_tgt_out['heatmaps'].detach())
+                disc_loss = disc_out['loss'].mean()
+                disc_loss_value = disc_loss.item()
+                optimizer_discriminator.zero_grad()
+                disc_loss.backward()
+                optimizer_discriminator.step()
+                optimizer_kp_detector.zero_grad()
+
 
             ####### LOG
             logger.add_scalar('src l2 loss', 
                                src_loss.item(), 
                                logger.iterations)
             logger.add_scalar('tgt geo loss',
-                               geo_loss.item(),
+                               geo_loss_value,
                                logger.iterations)
+            logger.add_scalar('disc loss',
+                               disc_loss_value,
+                               logger.iterations)
+            logger.add_scalar('gen loss',
+                               gen_loss_value,
+                               logger.iterations)
+            
             if i in log_params['log_imgs']:
                 concat_img_src = np.concatenate((
                     draw_kp(tensor_to_image(src_images[k]), 
@@ -170,21 +269,45 @@ def train_kpdetector(model_kp_detector,
                     draw_kp(tensor_to_image(tgt_images[k]), 
                              kp_detector_tgt_out['keypoints'][k], color='red')),
                              axis=2)
-                concat_img_geo = np.concatenate((
-                    draw_kp(tensor_to_image(tgt_images[k]), 
-                             kp_detector_tgt_out['keypoints'][k], color='red'),
-                    draw_kp(tensor_to_image(kp_detector_tgt_out['geo_images'][k]), 
-                             unnorm_kp(kp_detector_tgt_out['geo_out']['value'][k]), color='red')),
-                             axis=2)
+                if train_params['use_rotation']:
+                    concat_img_geo = np.concatenate((
+                        draw_kp(tensor_to_image(tgt_images[k]), 
+                                 kp_detector_tgt_out['keypoints'][k], color='red'),
+                        draw_kp(tensor_to_image(kp_detector_tgt_out['geo_images'][k]), 
+                                 unnorm_kp(kp_detector_tgt_out['geo_out']['value'][k]), color='red')),
+                                 axis=2)
 
+                    logger.add_image('geo tgt', concat_img_geo, logger.iterations)
+
+                heatmap_0 = kp_detector_src_out['heatmaps'][k, 0].unsqueeze(0)
+                heatmap_1 = kp_detector_src_out['heatmaps'][k, 1].unsqueeze(0)
+                concat_hm_src_net = np.concatenate((
+                       tensor_to_image(heatmap_0, True),
+                       tensor_to_image(heatmap_1, True)), axis= 2)
+                heatmap_0 = kp_detector_tgt_out['heatmaps'][k, 0].unsqueeze(0)
+                heatmap_1 = kp_detector_tgt_out['heatmaps'][k, 1].unsqueeze(0)
+                concat_hm_tgt_net = np.concatenate((
+                       tensor_to_image(heatmap_0, True),
+                       tensor_to_image(heatmap_1, True)), axis= 2)
+                heatmap_0 = src_annots_hm[k, 0].unsqueeze(0)
+                heatmap_1 = src_annots_hm[k, 1].unsqueeze(0)
+                concat_hm_gt = np.concatenate((
+                       tensor_to_image(heatmap_0, True),
+                       tensor_to_image(heatmap_1, True)), axis= 2)
+                
                 logger.add_image('src train', concat_img_src, logger.iterations)
                 logger.add_image('tgt train', concat_img_tgt, logger.iterations)
-                logger.add_image('geo tgt', concat_img_geo, logger.iterations)
+                logger.add_image('src_heatmap', concat_hm_src_net, logger.iterations)
+                logger.add_image('tgt_heatmap', concat_hm_tgt_net, logger.iterations)
+                logger.add_image('gt heatmap', concat_hm_gt, logger.iterations)
                 k += 1
                 k = k % len(log_params['log_imgs']) 
             logger.step_it()
 
         scheduler_kp_detector.step()
+        if train_params['use_gan']:
+            scheduler_discriminator.step()
+
         logger.step_epoch(models = {'model_kp_detector':model_kp_detector,
                                     'optimizer_kp_detector':optimizer_kp_detector})
 

@@ -48,9 +48,14 @@ train_params:
   batch_size: 32
   heatmap_var: 0.15
   test: False
+  use_rotation: False
+  use_gan: True
+  source_loss: 'heatmap'
   loss_weights:
-    geometric: 0.0 
+    geometric: 0.001
     source_regression: 1
+    generator_gan: 1
+    discriminator_gan: 0.5
   log_params:
     log_freq_iter: 200
     cpk_freq_epoch: 50
@@ -67,4 +72,12 @@ model_params:
     scale_factor: 1 
     num_kp: 32 
     num_channels: 3
-
+  discriminator_heatmap_params:
+    num_channels: 16 
+    num_kp: 15 #15
+    kp_variance: 0.01
+    block_expansion: 32
+    num_blocks: 4
+    max_features: 512
+    spectral_norm: True 
+ 

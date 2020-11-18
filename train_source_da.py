@@ -7,7 +7,7 @@ import yaml
 from time import gmtime, strftime
 from shutil import copy
 
-from modules.networks import KPDetector
+from modules.networks import KPDetector, MultiScaleDiscriminator
 from tensor_logger import Logger
 from datasets.humans36m import LoadHumansDataset
 from datasets.penn_action import LoadPennAction
@@ -57,15 +57,20 @@ if __name__ == "__main__":
     elif opt.src_dataset == "h36m":
         config['model_params']['kp_detector_params']['num_kp'] = 32
 
+    train_params = config['train_params']
     kp_map = None
     model_kp_detector = KPDetector(**config['model_params']['kp_detector_params']) 
     model_kp_detector.to(opt.device_ids[0]) 
+
+    model_discriminator= None
+    if train_params['use_gan']:
+        model_discriminator = MultiScaleDiscriminator(config['model_params']['discriminator_heatmap_params'], scales=[1.])
+        model_discriminator.to(opt.device_ids[0])
 
     ##### Dataset loading
     src_dset_loader = DatasetLoaders[opt.src_dataset]
     tgt_dset_loader = DatasetLoaders[opt.tgt_dataset]
     cfg_dset = config['datasets']
-    train_params = config['train_params']
     loader_src_train = src_dset_loader(**cfg_dset[train_params['src_train']])
     loader_src_test = src_dset_loader(**cfg_dset[train_params['src_test']])
     loader_tgt_train = tgt_dset_loader(**cfg_dset[train_params['tgt_train']])
@@ -78,5 +83,7 @@ if __name__ == "__main__":
                        loaders,
                        train_params,
                        opt.checkpoint,
-                       logger, opt.device_ids, kp_map)
+                       logger, opt.device_ids, 
+                       model_discriminator=model_discriminator,
+                       kp_map=kp_map)
  
