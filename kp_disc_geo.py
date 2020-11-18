@@ -203,24 +203,12 @@ def geo_consistency_affine(y, y_affine,aff_matrix):
     out['t_inv'] = l1_loss(aff_to_orig_hm, y).mean()
     return out
 
-### pytorch implementation
+### compute the angle difference between the kps
 def angle_difference(kps,rot_kps,gt_angle,loss, device="cuda"):
-    c = torch.zeros(kps.shape[0],kps.shape[1],2).to(device)
-  
-    v0 = c - rot_kps
-    v1 = c - kps
-
-    stack = torch.stack([v0,v1], 2)
-    det =  torch.det(stack)
-    dot = torch.sum(v0*v1, dim=2)
-
-    angle = torch.atan2(det,dot)
+    angle = torch.atan2(torch.det(torch.stack([rot_kps,kps], 2)),torch.sum(rot_kps*kps, dim=2))
     gt_angle = torch.tensor(gt_angle).type(torch.FloatTensor)
     gt_angle = gt_angle.cuda()
-    #print(f"angle_shape {angle.shape}")
-    #print(f"kps_shape {kps.shape}")
     angle = (angle*180/np.pi).mean()
-    #print(angle)
     return loss(angle,gt_angle)
 
 def train_generator_geo(model_generator,
@@ -274,13 +262,21 @@ def train_generator_geo(model_generator,
     unrolled_steps = train_params["unrolled_steps"] 
     buffer_flag = train_params["buffer"] 
     affine_augmentation = train_params["affine_augmentation"]
-    print(f"buffer {buffer_flag} unrolled_steps {unrolled_steps}")
-    # saving the model if a new max pck is reached
+    # save the model if a new max pck is reached
     max_pck = None
     geom_attention = train_params["geom_attention"]
 
+    reload_disc = train_params["reload_disc"]
+
+    reload_buffer = 10
+    if reload_disc:
+        old_disc = copy.deepcopy(discriminator.state_dict())
+
+
     angle_difference_flag = train_params["angle_difference"] # use the angle difference instead of equivariance
     geo_loss = torch.nn.MSELoss()
+    print(f"buffer: {buffer_flag} unrolled_steps: {unrolled_steps} affine: {affine_augmentation} angle_diff_equivariance:  {angle_difference_flag}")
+
 
     for epoch in range(logger.epoch, train_params['num_epochs']):
         results = evaluate(model_generator, loader_test, train_params['dataset'], kp_map)
@@ -308,7 +304,8 @@ def train_generator_geo(model_generator,
             tgt_gt = tgt_batch['annots'].cuda()
 
             if not affine_augmentation:
-                angle = random.randint(1,359)
+                range_angle = int( train_params["angle_range"] * (epoch/train_params['num_epochs']))
+                angle = random.randint(-1*range_angle,range_angle)
                 geo_src_images = kp2gaussian2(batch_kp_rotation(src_annots, angle), (122, 122), kpVariance).detach()
                 tgt_gt_rot = batch_kp_rotation(tgt_gt, angle)
                 tgt_gt_rot = tgt_gt_rot.detach()
@@ -324,6 +321,10 @@ def train_generator_geo(model_generator,
                 geo_src_images = kp2gaussian2(src_annots, (122, 122), kpVariance)
                 geo_src_images = geo_src_images.detach()
 
+            if reload_disc and reload_buffer % epoch ==0:
+                reload_disc = copy.deepcopy(old_disc)
+                old_disc = copy.deepcopy(discriminator.state_dict())
+                discriminator.load_state_dict(reload_disc)
 
 
             ## code adapted from https://github.com/andrewliao11/unrolled-gans
