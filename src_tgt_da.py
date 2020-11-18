@@ -25,7 +25,8 @@ class KPDetectorTrainer(nn.Module):
     def __init__(self, kp_detector, train_params, 
                        discriminator=None, 
                        geo_transform=None,
-                       kp_to_skl=None):
+                       kp_to_skl=None, 
+                       angle_equivariance=False):
         super(KPDetectorTrainer, self).__init__()
         self.detector = kp_detector
         self.detector.convert_bn_to_dial(self.detector)
@@ -36,6 +37,10 @@ class KPDetectorTrainer(nn.Module):
         self.loss_weights = self.train_params['loss_weights']
         self.to_skeleton = kp_to_skl
         self.epoch_ratio = 0
+        self.angle_equivariance = angle_equivariance
+        self.geo_f = torch.nn.MSELoss()
+        self.angle_range = 45
+        self.angle_incr_factor = 2
 
 
 
@@ -55,12 +60,15 @@ class KPDetectorTrainer(nn.Module):
         heatmaps = dict_out['heatmaps'][:, kp_map] if kp_map is not None else dict_out['heatmaps']
         geo_loss = 0
         if self.geo_transform is not None:
-            range_angle = int(45 * self.epoch_ratio)
+            range_angle = min(self.angle_range ,int(self.angle_incr_factor * (self.angle_range* self.epoch_ratio)))
             angle = random.randint(-1*range_angle,range_angle)
             geo_images = self.geo_transform(images, angle).detach()
             geo_dict_out = self.detector(geo_images)
             geo_heatmaps = geo_dict_out['heatmaps'] if kp_map is None else geo_dict_out['heatmaps'][:, kp_map]
-            geo_loss = self.equivariance_loss(heatmaps, geo_heatmaps, angle)
+            if self.angle_equivariance:
+                geo_loss = self.angle_difference(dict_out['value'],geo_dict_out['value'], angle, device=self.device)
+            else:
+                geo_loss = self.equivariance_loss(heatmaps, geo_heatmaps, angle)
 
         kps = unnorm_kp(dict_out['value'])
         return {"keypoints": kps,
@@ -74,6 +82,14 @@ class KPDetectorTrainer(nn.Module):
         backward = l1_loss(source,
                             self.geo_transform(transformed, -geo_param)).mean()
         return forward + backward
+    
+    def angle_difference(self,kps,rot_kps,gt_angle, device="cuda"):
+
+        angle = torch.atan2(torch.det(torch.stack([rot_kps,kps], 2)),torch.sum(rot_kps*kps, dim=2))
+        gt_angle = torch.tensor(gt_angle).type(torch.FloatTensor)
+        gt_angle = gt_angle.to(device)
+        angle = (angle*180/np.pi).mean()
+        return self.geo_f(angle,gt_angle)
 
     def adapt(self, images, kp_map):
         self.detector.set_domain_all(source=False)
@@ -85,12 +101,15 @@ class KPDetectorTrainer(nn.Module):
         geo_dict_out = None
         geo_images = None
         if self.geo_transform is not None:
-            range_angle = int(45 * self.epoch_ratio)
+            range_angle = min(self.angle_range ,int(self.angle_incr_factor * (self.angle_range* self.epoch_ratio)))
             angle = random.randint(-1*range_angle,range_angle)
             geo_images = self.geo_transform(images, angle).detach()
             geo_dict_out = self.detector(geo_images)
             geo_heatmaps = geo_dict_out['heatmaps'][:, kp_map]
-            geo_loss = self.equivariance_loss(heatmaps, geo_heatmaps, angle)
+            if self.angle_equivariance:
+                geo_loss = self.angle_difference(kps,geo_dict_out['value'][:,kp_map], angle, device=self.device)
+            else: 
+                geo_loss = self.equivariance_loss(heatmaps, geo_heatmaps, angle)
         generator_loss = 0
         if self.discriminator is not None:
             generator_scores = []
@@ -197,12 +216,12 @@ def train_kpdetector(model_kp_detector,
         geo_transform = batch_image_rotation
     kp_detector = KPDetectorTrainer(model_kp_detector, train_params, 
                                     discriminator=model_discriminator,
-                                    geo_transform=geo_transform)
+                                    geo_transform=geo_transform, angle_equivariance=train_params['angle_equivariance'])
     if train_params['use_gan']:
         discriminator = DiscriminatorTrainer(model_discriminator, train_params)
     # number of unrolled steps to do, if 0 no unrolling, usually 5 or 10
     unrolled_steps = train_params["unrolled_steps"] 
-    print(f"unrolled_steps: {unrolled_steps}, rotation: {train_params['use_rotation']}")
+    print(f"unrolled_steps: {unrolled_steps}, rotation: {train_params['use_rotation']}, angle_equivariance {train_params['angle_equivariance']}")
 
     k = 0
     if train_params['test'] == True:

@@ -70,13 +70,13 @@ train_params:
   batch_size: 32
   heatmap_var: 0.15
   test: False
-  use_rotation: False
+  use_rotation: True
   use_gan: True
-  angle_equivariance: True
+  angle_equivariance: False
   unrolled_steps : 10
   source_loss: 'heatmap'
   loss_weights:
-    geometric: 0.001
+    geometric: 0.01
     source_regression: 1
     generator_gan: 1
     discriminator_gan: 0.5
