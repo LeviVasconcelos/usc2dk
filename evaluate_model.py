@@ -125,7 +125,7 @@ if __name__ == "__main__":
     ##### Model instantiation
     model_kp_detector = KPDetector(**config['model_params']['kp_detector_params']) 
     model_kp_detector.to(opt.device_ids[0]) 
-#    kp_state_dict = torch.load(opt.src_model)
+    kp_state_dict = torch.load(opt.src_model)
 
     if opt.src_model != 'scratch':
         try:

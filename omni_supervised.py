@@ -20,6 +20,7 @@ from logger import Visualizer
 from PIL import Image, ImageDraw
 import copy
 import random
+from modules.util import extract_variance_percentile
 
 class KPDetectorTrainer(nn.Module):
     def __init__(self, kp_detector, train_params, 
@@ -41,16 +42,21 @@ class KPDetectorTrainer(nn.Module):
         self.angle_equivariance = angle_equivariance
         self.geo_f = torch.nn.MSELoss()
         self.angle_range = 45
-        self.angle_incr_factor = 2
+        self.angle_incr_factor = 15
         self.device = device
+        self.percentile = 0
 
 
 
     def forward(self, images, ground_truth, mask=None, kp_map=None):
         self.detector.set_domain_all(source=True)
+        #print(f"image.device {images.device}")
         dict_out = self.detector(images)
         gt = ground_truth if kp_map is None else ground_truth[:, kp_map]
         src_loss = 0
+
+        if mask is not None:
+            mask = mask.to(images.device)
         if self.train_params['source_loss'] == 'kp_values':
             src_loss = masked_l2_loss(dict_out['value'], gt, mask)
         elif self.train_params['source_loss'] == 'heatmap':
@@ -65,18 +71,23 @@ class KPDetectorTrainer(nn.Module):
             range_angle = min(self.angle_range ,int(self.angle_incr_factor * (self.angle_range* self.epoch_ratio)))
             angle = random.randint(-1*range_angle,range_angle)
             geo_images = self.geo_transform(images, angle).detach()
+            gt_geo = batch_kp_rotation(gt,angle).detach()
+            gt_geo_heatmaps = kp2gaussian2(gt_geo, size, variance).detach()
+
             geo_dict_out = self.detector(geo_images)
             geo_heatmaps = geo_dict_out['heatmaps'] if kp_map is None else geo_dict_out['heatmaps'][:, kp_map]
             if self.angle_equivariance:
                 geo_loss = self.angle_difference(dict_out['value'],geo_dict_out['value'], angle, device=self.device)
             else:
-                geo_loss = self.equivariance_loss(heatmaps, geo_heatmaps, angle)
+                geo_loss = masked_l2_heatmap_loss(geo_heatmaps, 
+                                               gt_geo_heatmaps, mask)
+                #geo_loss = self.equivariance_loss(heatmaps, geo_heatmaps, angle)
 
         kps = unnorm_kp(dict_out['value'])
         return {"keypoints": kps,
                 "heatmaps": dict_out['heatmaps'],
                 "src_loss": src_loss.mean(),
-                "geo_loss": geo_loss,
+                "geo_loss": geo_loss.mean(),
                 }
     def equivariance_loss(self, source, transformed, geo_param):
         forward = l1_loss(self.geo_transform(source, geo_param), 
@@ -121,7 +132,7 @@ class KPDetectorTrainer(nn.Module):
         heatmap = heatmap.unsqueeze(-1) + 1e-7
         grid_ = self.make_coordinate_grid(shape[2:], heatmap.type())
         grid = grid_.unsqueeze(0).unsqueeze(0)
-
+        grid =  grid.to(heatmap.device)
         mean_ = (heatmap * grid)
         mean = mean_.sum(dim=(2, 3))
 
@@ -129,7 +140,7 @@ class KPDetectorTrainer(nn.Module):
 
         return kp
 
-    def generate_labels(self, label_generator, images, num_augmentation=5, use_heatmaps=True, device="cuda", range_angle=45, kp_map=None):
+    def generate_labels(self, label_generator, images, num_augmentation=5, use_heatmaps=True, device="cuda", range_angle=45,increase_sample_f=4 ,kp_map=None):
         heatmaps = torch.Tensor([]).to(device)
         kp_lists = torch.Tensor([]).to(device)
         with torch.no_grad():
@@ -161,66 +172,102 @@ class KPDetectorTrainer(nn.Module):
             out['value'] = kps["mean"] #[:,kp_map]
             out["var"] = kps["var"][:,kp_map].mean(1)
         out["var"] = out["var"].cpu()
-        indexes = np.where(out["var"]<out["var"].mean())
+
+        index_sorted = np.argsort(out["var"])
+        #print(index_sorted)
+        num_samples = min( int(0.5*len(index_sorted)), int( increase_sample_f * self.epoch_ratio*len(index_sorted) )+2 )
+        #print(num_samples)
+        indexes = np.where(out["var"]<self.percentile)
+        #indexes = np.where(out["var"]<1.1903093311005364e-08)
+        #indexes = np.where(out["var"]<1.1903093311005364e-04)
+        
         return images[indexes], out["value"][indexes]
+        #return images[index_sorted[:num_samples]], out["value"][index_sorted[:num_samples]]
 
-    def adapt(self, images, label_generator, kp_map, mask=None):
+    def adapt(self, images, label_generator, kp_map, mask=None, device="cuda"):
+
+        kps, heatmaps, tgt_loss, geo_loss, geo_out, geo_images, tgt_images, kps_pseud, generator_loss = None, None, 0, 0, None, None, None, None, 0
+
         self.detector.set_domain_all(source=False)
-        images, ground_truth = self.generate_labels(label_generator, images, kp_map=kp_map)
-        if mask is not None:
-            mask = mask.to("cuda:0")
-        dict_out = self.detector(images)
-        gt = ground_truth if kp_map is None else ground_truth[:, kp_map]
-        src_loss = 0
-        kps = dict_out['value'][:, kp_map]
-        kps = unnorm_kp(kps)
-        heatmaps = dict_out['heatmaps'][:, kp_map] if kp_map is not None else dict_out['heatmaps']
+        images_selected, ground_truth = self.generate_labels(label_generator, images, kp_map=kp_map, device=device)     
+        if images_selected.shape[0] > 0:
+            images = images_selected
+            if mask is not None:
+                mask = mask.to(device)
+            gt = ground_truth if kp_map is None else ground_truth[:, kp_map]
+            tgt_loss = 0
+            dict_out = self.detector(images)
+            kps = dict_out['value'][:, kp_map]
+            kps = unnorm_kp(kps)
+            heatmaps = dict_out['heatmaps'][:, kp_map] if kp_map is not None else dict_out['heatmaps']
 
-        #heatmaps = dict_out['heatmaps'][:, kp_map]
-        if self.train_params['source_loss'] == 'kp_values':
-            src_loss = masked_l2_loss(dict_out['value'], gt, mask)
-        elif self.train_params['source_loss'] == 'heatmap':
-            size = (self.heatmap_res, self.heatmap_res)
-            variance = self.train_params['heatmap_var']
-            gt_heatmaps = kp2gaussian2(gt, size, variance).detach()
-            src_loss = masked_l2_heatmap_loss(heatmaps, 
-                                               gt_heatmaps, mask)
-        
-        
-        geo_loss = 0
-        geo_dict_out = None
-        geo_images = None
+            #heatmaps = dict_out['heatmaps'][:, kp_map]
+
+            if self.train_params['source_loss'] == 'kp_values':
+                tgt_loss = masked_l2_loss(dict_out['value'], gt, mask)
+            elif self.train_params['source_loss'] == 'heatmap':
+                size = (self.heatmap_res, self.heatmap_res)
+                variance = self.train_params['heatmap_var']
+                gt_heatmaps = kp2gaussian2(gt, size, variance).detach()
+                tgt_loss = masked_l2_heatmap_loss(heatmaps, 
+                                                gt_heatmaps, mask).mean()
+            
+            
+            geo_loss = 0
+            geo_dict_out = None
+            geo_images = None
 
 
+            if self.geo_transform is not None:
+                range_angle = min(self.angle_range ,int(self.angle_incr_factor * (self.angle_range* self.epoch_ratio)))
+                angle = random.randint(-1*range_angle,range_angle)
+                geo_images = self.geo_transform(images, angle).detach()
+                gt_geo = batch_kp_rotation(gt,angle).detach()
+                gt_geo_heatmaps = kp2gaussian2(gt_geo, size, variance).detach()
 
-        if self.geo_transform is not None:
-            range_angle = min(self.angle_range ,int(self.angle_incr_factor * (self.angle_range* self.epoch_ratio)))
-            angle = random.randint(-1*range_angle,range_angle)
-            geo_images = self.geo_transform(images, angle).detach()
-            geo_dict_out = self.detector(geo_images)
-            geo_heatmaps = geo_dict_out['heatmaps'][:, kp_map]
-            if self.angle_equivariance:
-                geo_loss = self.angle_difference(kps,geo_dict_out['value'][:,kp_map], angle, device=self.device)
-            else: 
-                geo_loss = self.equivariance_loss(heatmaps, geo_heatmaps, angle)
-        generator_loss = 0
-        if self.discriminator is not None:
-            generator_scores = []
-            maps = self.discriminator(heatmaps)
-            for i, gen_map in enumerate(maps):
-                gen_scores = generator_gan_loss(gen_map, 
-                                           self.loss_weights['generator_gan']).mean()
-                generator_scores.append(gen_scores)
-            generator_loss = sum(generator_scores) / len(generator_scores)
+                geo_dict_out = self.detector(geo_images)
+                geo_heatmaps = geo_dict_out['heatmaps'][:, kp_map]
+                if self.angle_equivariance:
+                    geo_loss = self.angle_difference(kps,geo_dict_out['value'][:,kp_map], angle, device=self.device)
+                else: 
+                    geo_loss = masked_l2_heatmap_loss(geo_heatmaps, 
+                                    gt_geo_heatmaps, mask).mean()
+                    #geo_loss = self.equivariance_loss(heatmaps, geo_heatmaps, angle)
+
+
+            generator_loss = 0
+            if self.discriminator is not None:
+                generator_scores = []
+                maps = self.discriminator(heatmaps)
+                for i, gen_map in enumerate(maps):
+                    gen_scores = generator_gan_loss(gen_map, 
+                                            self.loss_weights['generator_gan']).mean()
+                    generator_scores.append(gen_scores)
+                generator_loss = sum(generator_scores) / len(generator_scores)
+            ground_truth =  unnorm_kp(ground_truth)
+        else:
+            dict_out = self.detector(images)
+            kps = dict_out['value'][:, kp_map]
+            kps = unnorm_kp(kps)
+            heatmaps = dict_out['heatmaps'][:, kp_map] if kp_map is not None else dict_out['heatmaps']
+
+            if self.geo_transform is not None:
+                range_angle = min(self.angle_range ,int(self.angle_incr_factor * (self.angle_range* self.epoch_ratio)))
+                angle = random.randint(-1*range_angle,range_angle)
+                geo_images = self.geo_transform(images, angle).detach()
+                geo_dict_out = self.detector(geo_images)
+                geo_heatmaps = geo_dict_out['heatmaps'][:, kp_map]
+
 
         
 
         return {"keypoints": kps,
                 "heatmaps": heatmaps,
-                "tgt_loss" : src_loss,
+                "tgt_loss" : tgt_loss,
                 "geo_loss": geo_loss,
                 "geo_out": geo_dict_out,
                 "geo_images": geo_images,
+                "kps_pseud": ground_truth,
                 "generator_loss": generator_loss,
                 }
 
@@ -325,21 +372,25 @@ def train_kpdetector(model_kp_detector,
 
     k = 0
     if train_params['test'] == True:
-        results = evaluate(model_kp_detector, loader_tgt, dset=train_params['dataset'])
+        results = evaluate(model_kp_detector, loader_tgt, dset=train_params['dataset'], filter=kp_map)
         print(' MSE: ' + str(results['MSE']) + ' PCK: ' + str(results['PCK'])) 
         return
 
     heatmap_var = train_params['heatmap_var']
+    reload_label_generator = train_params['reload_label_generator']
+    start_supervise = train_params["start_supervise"]
+    label_generator.convert_bn_to_dial(label_generator)
+
     heatmap_size = (kp_detector.heatmap_res, kp_detector.heatmap_res)
     loader_src_train, loader_src_test, loader_tgt = loaders
     iterator_source = iter(loader_src_train)
     for epoch in range(logger.epoch, train_params['num_epochs']):
         kp_detector.epoch_ratio = epoch/train_params["num_epochs"]
         kp_detector.detector.set_domain_all(source=False)
-        results_tgt = evaluate(kp_detector.detector, loader_tgt, dset=train_params['tgt_train'], filter=kp_map)
+        results_tgt = evaluate(kp_detector.detector, loader_tgt, dset=train_params['tgt_train'], filter=kp_map, device=device_ids)
         kp_detector.detector.set_domain_all(source=True)
-        results_src_test = evaluate(kp_detector.detector, loader_src_test, dset=train_params['src_test']) 
-        results_src_train = evaluate(kp_detector.detector, loader_src_train, dset=train_params['src_train'])
+        results_src_test = evaluate(kp_detector.detector, loader_src_test, dset=train_params['src_test'],  device=device_ids) 
+        results_src_train = evaluate(kp_detector.detector, loader_src_train, dset=train_params['src_train'], device=device_ids)
         print('Epoch ' + str(epoch)+ ' PCK_target: ' + str(results_tgt['PCK']))
         logger.add_scalar('MSE target', results_tgt['MSE'], epoch)
         logger.add_scalar('PCK target', results_tgt['PCK'], epoch)
@@ -347,21 +398,41 @@ def train_kpdetector(model_kp_detector,
         logger.add_scalar('PCK src train', results_src_train['PCK'], epoch)
         logger.add_scalar('MSE src test', results_src_test['MSE'], epoch)
         logger.add_scalar('PCK src test', results_src_test['PCK'], epoch)
-   
+
+        ## reload the label generator model after "reload_label_generator" iteration
+        if epoch != 0 and epoch % reload_label_generator == 0 :
+            label_state_dict = copy.deepcopy(model_kp_detector.state_dict()) 
+            label_generator.load_state_dict(label_state_dict)
+            label_generator.set_domain_all(source=False)
+            print(f"Re-Loaded Label Generator")
+
+            var_treshold, _ = extract_variance_percentile(label_generator, loader_tgt, filter=kp_map, device=device_ids, num_augmentation=5, range_angle=45, percentile = 5)
+            kp_detector.percentile = var_treshold
+            print(f"Variance Treshold settet at : ", var_treshold)
+        elif epoch == start_supervise:
+            # start to use the supervision using pseudo label generation    
+            label_state_dict = copy.deepcopy(model_kp_detector.state_dict()) 
+            label_generator.load_state_dict(label_state_dict)
+            label_generator.set_domain_all(source=False)
+            print(f"Loaded Label Generator")
+
+            var_treshold, _ = extract_variance_percentile(label_generator, loader_tgt, filter=kp_map, device=device_ids, num_augmentation=5, range_angle=45, percentile = 5)
+            kp_detector.percentile = var_treshold
+            print(f"Variance Treshold settet at : ", var_treshold)
+
         for i, tgt_batch  in enumerate(tqdm(loader_tgt)):
-            tgt_images = tgt_batch['imgs'].cuda()
-            tgt_annots = tgt_batch['annots'].cuda()
+            tgt_images = tgt_batch['imgs'].to(device_ids)
+            tgt_annots = tgt_batch['annots'].to(device_ids)
             try:
                 src_batch = next(iterator_source)
             except:
                 iterator_source = iter(loader_src_train)
                 src_batch = next(iterator_source)
-            src_images = src_batch['imgs'].cuda()
-            src_annots = src_batch['annots'].cuda()
+            src_images = src_batch['imgs'].to(device_ids) 
+            src_annots = src_batch['annots'].to(device_ids)
             src_annots_hm = kp2gaussian2(src_annots, heatmap_size, heatmap_var)
             mask = None if 'kp_mask' not in src_batch.keys() else src_batch['kp_mask']
             mask_tgt = None if 'kp_mask' not in tgt_batch.keys() else tgt_batch['kp_mask']
-
             ## code adapted from https://github.com/andrewliao11/unrolled-gans
             ## Unroll the discriminator here making a deep copy
             if train_params['use_gan'] and unrolled_steps > 0:
@@ -373,16 +444,23 @@ def train_kpdetector(model_kp_detector,
                     kp_detector.detector.set_domain_all(source=True)
 
             kp_detector_src_out = kp_detector(src_images, src_annots, mask)
-            kp_detector_tgt_out = kp_detector.adapt(tgt_images, label_generator,kp_map, mask=mask_tgt)
+            kp_detector_tgt_out = kp_detector.adapt(tgt_images, label_generator,kp_map, mask=mask_tgt, device=device_ids)
 
             src_loss = kp_detector_src_out['src_loss'].mean()
-            tgt_loss = kp_detector_tgt_out['tgt_loss'].mean()
+            if kp_detector_tgt_out['tgt_loss'] != 0:
+                tgt_loss = kp_detector_tgt_out['tgt_loss'].mean()
+            else:
+                tgt_loss = 0 
             geo_loss_value = 0
             geo_loss = 0
             if train_params['use_rotation']:
-                geo_out = kp_detector_tgt_out['geo_out']
-                geo_loss = train_params['loss_weights']['geometric'] * \
-                       (kp_detector_tgt_out['geo_loss'] + kp_detector_src_out['geo_loss'])
+                if epoch > start_supervise:
+                    geo_out = kp_detector_tgt_out['geo_out']
+                    geo_loss = train_params['loss_weights']['geometric'] * \
+                        (kp_detector_tgt_out['geo_loss'] + kp_detector_src_out['geo_loss'])
+                else:
+                    geo_out = kp_detector_tgt_out['geo_out']
+                    geo_loss = train_params['loss_weights']['geometric'] * kp_detector_src_out['geo_loss']
                 geo_loss_value = geo_loss.item()
 
             gen_loss = 0
@@ -390,8 +468,16 @@ def train_kpdetector(model_kp_detector,
             if train_params['use_gan']:
                 gen_loss = kp_detector_tgt_out['generator_loss']
                 gen_loss_value = gen_loss.item()
+                
+            # if we started the supervision part use also the tgt loss
+            if epoch > start_supervise:
+                if tgt_loss != 0 :
+                    loss = geo_loss + src_loss + gen_loss + tgt_loss
+                else:
+                    loss = geo_loss + src_loss + gen_loss 
+            else:
+                loss = geo_loss + src_loss 
 
-            loss = geo_loss + src_loss + gen_loss + tgt_loss
             loss.backward()
 
             optimizer_kp_detector.step()
@@ -412,13 +498,14 @@ def train_kpdetector(model_kp_detector,
                 optimizer_discriminator.step()
                 optimizer_kp_detector.zero_grad()
 
-
+            if tgt_loss!= 0 :
+                tgt_loss =  tgt_loss.item()
             ####### LOG
             logger.add_scalar('src l2 loss', 
                                src_loss.item(), 
                                logger.iterations)
             logger.add_scalar('tgt l2 loss', 
-                               tgt_loss.item(), 
+                               tgt_loss, 
                                logger.iterations)
             logger.add_scalar('tgt geo loss',
                                geo_loss_value,
@@ -429,7 +516,15 @@ def train_kpdetector(model_kp_detector,
             logger.add_scalar('gen loss',
                                gen_loss_value,
                                logger.iterations)
-            
+            if len(kp_detector_tgt_out['kps_pseud'])>0:
+                concat_img_tgt_pseudo = np.concatenate((
+                    draw_kp(tensor_to_image(tgt_images[k]), 
+                             unnorm_kp(tgt_annots[k])),
+                    draw_kp(tensor_to_image(tgt_images[k]), 
+                             kp_detector_tgt_out['kps_pseud'][k], color='red')),
+                             axis=2)
+                logger.add_image('pseudo labels', concat_img_tgt_pseudo, logger.iterations)
+
             if i in log_params['log_imgs']:
                 concat_img_src = np.concatenate((
                     draw_kp(tensor_to_image(src_images[k]), 
@@ -443,6 +538,7 @@ def train_kpdetector(model_kp_detector,
                     draw_kp(tensor_to_image(tgt_images[k]), 
                              kp_detector_tgt_out['keypoints'][k], color='red')),
                              axis=2)
+
                 if train_params['use_rotation']:
                     concat_img_geo = np.concatenate((
                         draw_kp(tensor_to_image(tgt_images[k]), 
@@ -474,8 +570,9 @@ def train_kpdetector(model_kp_detector,
                 logger.add_image('src_heatmap', concat_hm_src_net, logger.iterations)
                 logger.add_image('tgt_heatmap', concat_hm_tgt_net, logger.iterations)
                 logger.add_image('gt heatmap', concat_hm_gt, logger.iterations)
-                k += 1
-                k = k % len(log_params['log_imgs']) 
+                logger.add_image('annotation heatmap', concat_hm_gt, logger.iterations)
+                #k += 1
+                #k = k % len(log_params['log_imgs']) 
             logger.step_it()
 
         scheduler_kp_detector.step()

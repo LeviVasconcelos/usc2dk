@@ -4,6 +4,8 @@ import torch.nn.functional as F
 import torch
 import torch.nn as nn
 import math
+from tqdm import tqdm
+import random
 
 import numpy as np
 from sync_batchnorm import SynchronizedBatchNorm3d as BatchNorm3d
@@ -163,7 +165,9 @@ def kp2gaussian2(kp, spatial_size, kp_variance, temp=0.1):
     # Preprocess kp shape
     shape = mean.shape[:number_of_leading_dimensions] + (1, 1, 2)
     mean = mean.view(*shape)
-
+    #print(f"coord: {coordinate_grid.device}, mean {mean.device}")
+    coordinate_grid = coordinate_grid.to(mean.device)
+    #print(f"coord: {coordinate_grid.device}, mean {mean.device}")
     mean_sub = (coordinate_grid - mean)
 
     out = torch.exp(-0.5 * (mean_sub ** 2).sum(-1) / kp_variance)
@@ -532,7 +536,7 @@ class DecoderV2(nn.Module):
 def batch_kp_rotation(kps, angle):
     angle = torch.tensor(angle * math.pi / 180.)
     rot_matrix = torch.tensor([[torch.cos(angle), torch.sin(angle)],
-                               [-1.*torch.sin(angle), torch.cos(angle)]]).cuda()
+                               [-1.*torch.sin(angle), torch.cos(angle)]]).to(kps.device)
     rot_kps = torch.matmul(kps, rot_matrix.t())
     return rot_kps 
 
@@ -578,3 +582,63 @@ def batch_image_rotation(imgs, angle):
 
     return F.interpolate(img_out, scale_factor=(1,1))
 
+
+def gaussian2kp_v2(heatmap):
+    """
+    Extract the mean and the variance from a heatmap
+    """
+    shape = heatmap.shape
+    #adding small eps to avoid 'nan' in variance
+    kp = {}
+    kp['var'] = torch.var(heatmap,(2,3))
+    heatmap = heatmap.unsqueeze(-1) + 1e-7
+    grid_ = make_coordinate_grid(shape[2:], heatmap.type())
+    grid = grid_.unsqueeze(0).unsqueeze(0)
+    grid =  grid.to(heatmap.device)
+    mean_ = (heatmap * grid)
+    mean = mean_.sum(dim=(2, 3))
+
+    kp['mean'] =  mean 
+
+    return kp
+
+def extract_variance_percentile(model, loader, dset='mpii', filter=None, device='cuda', num_augmentation=5, range_angle=45, percentile = 5):
+    ### extract the variance and return the percentile values specified 
+    model.eval()
+    variance =  torch.Tensor([]).to(device)
+    with torch.no_grad():
+        for batch in tqdm(loader):
+            try:
+                mask = batch['kp_mask'].to(device)
+            except:
+                mask = None
+            heatmaps = torch.Tensor([]).to(device)
+            kp_lists = torch.Tensor([]).to(device)
+            losses = torch.Tensor([])
+
+            for _ in range(num_augmentation):
+                range_angle = range_angle
+                angle = random.randint(-1*range_angle,range_angle)
+                rot_img = batch_image_rotation(batch['imgs'], angle)
+                rot_img = rot_img.to(device)
+                out = model(rot_img)
+                if filter is not None:
+                    heatmaps = torch.cat((heatmaps, batch_image_rotation(out["heatmaps"], -angle).unsqueeze(1)), axis=1 )
+                else:
+                    heatmaps = torch.cat((heatmaps, batch_image_rotation(out["heatmaps"], -angle).unsqueeze(1)), axis=1 )
+
+            # [batch, n_aug, nkp, w_hm, h_hm]            
+            hm  = heatmaps.sum(axis=1)/heatmaps.shape[1] # [batch, nkp, w_hm, h_hm]
+            
+            kps = gaussian2kp_v2(hm)
+            out['value'] = kps["mean"] 
+            if filter is not None:
+                out["var"] = kps["var"][:,filter]
+            else:
+                out["var"] = kps["var"]
+
+            variance = torch.cat((variance, out["var"].mean(1)), 0)
+           
+    
+
+    return  np.percentile(variance.cpu(),percentile , axis=0), variance

@@ -15,11 +15,13 @@ def masked_l2_heatmap_loss(prediction, target, mask=None):
             print('NaN on mask!!')
             raise ValueError
         img_mask = torch.ones(diff.shape)
+        #print(f"mask.shaep {mask.shape}")
         diff = diff * mask.unsqueeze(-1)
         division = mask.sum(1).unsqueeze(-1)
         if (division == 0).sum() > 0:
             print('division by Zero!')
             raise ValueError
+        #print(f"diff shape : {diff.shape}, division.shape {division.shape}")
         diff = (diff / division)
         diff = diff.view(diff.shape[0], -1).sum(-1)
         return diff

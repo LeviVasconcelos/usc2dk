@@ -16,6 +16,7 @@ from datasets.mpii_loader import LoadMpii
 from datasets.unaligned_loader import LoadUnalignedH36m 
 from datasets.utils import DatasetLoaders, MapH36mTo
 from omni_supervised import train_kpdetector
+import numpy as np
 
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -26,7 +27,7 @@ if __name__ == "__main__":
                          type=lambda x: list(map(int, x.split(','))), 
                          help="Names of the devices comma separated.")
     parser.add_argument("--src_dataset", default="h36m", type=str, help="which dataset to use for training. [h36m | penn]")
-    parser.add_argument("--label_model", required=True, help="Model that generates the labels")
+    parser.add_argument("--label_model", default=None,  help="Model that generates the labels")
     parser.add_argument("--tgt_dataset", default="mpii", type=str, help="which dataset to use for target")
     parser.add_argument("--test", action="store_true", help='test instead of train model')
     parser.add_argument("--epochs", default=500, type=int, help="nubmer of epochs to train")
@@ -66,12 +67,10 @@ if __name__ == "__main__":
 
 
     ##### Label Generator Model instantiation
-    label_generator = KPDetector(**config['model_params']['kp_detector_params']) 
-    label_generator.to(opt.device_ids[0]) 
-    label_state_dict = torch.load(opt.label_model)
-
-    #model_kp_detector.to("cuda:1")
-    if opt.label_model != 'scratch':
+    if opt.label_model != None:
+        label_generator = KPDetector(**config['model_params']['kp_detector_params']) 
+        label_generator.to(opt.device_ids[0]) 
+        label_state_dict = torch.load(opt.label_model)
         try:
             print(f"loading {opt.label_model}")
             label_state_dict = torch.load(opt.label_model)
@@ -84,6 +83,12 @@ if __name__ == "__main__":
         except:
             print('failed to load model weights')
             exit(1)
+    else:
+        label_generator = KPDetector(**config['model_params']['kp_detector_params']) 
+        label_generator.to(opt.device_ids[0]) 
+
+    #model_kp_detector.to("cuda:1")
+
 
     ##### Dataset loading
     src_dset_loader = DatasetLoaders[opt.src_dataset]
@@ -97,7 +102,7 @@ if __name__ == "__main__":
     loaders = [loader_src_train, loader_src_test, loader_tgt_train]
 
     kp_map = MapH36mTo[opt.tgt_dataset]
-
+    
 
     train_kpdetector(model_kp_detector,
                        label_generator,
