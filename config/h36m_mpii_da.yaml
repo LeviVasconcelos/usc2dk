@@ -5,7 +5,7 @@ datasets:
    h36m_train:
     subjects: [0,1,2,3,4]
     rgb: True
-    nImages: 10000
+    nImages: 1000
     nViews: 4
     batch_size: 4 
     img_size: 128
@@ -13,10 +13,11 @@ datasets:
     process_batch: True
     root_dir: '/data/levi/workspace/h36m-fetch/video_processed_resized_crop' 
     kp_list: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+    color_jitter: True
    h36m_test:
     subjects: [5,6]
     rgb: True
-    nImages: 10000
+    nImages: 1000
     nViews: 4
     batch_size: 4 
     img_size: 128
@@ -48,12 +49,14 @@ train_params:
   batch_size: 32
   heatmap_var: 0.15
   test: False
-  use_rotation: False
+  use_rotation: True
+  angle_equivariance: False
+  color_jitter: True
   use_gan: True
   unrolled_steps : 10
   source_loss: 'heatmap'
   loss_weights:
-    geometric: 0.001
+    geometric: 1.0e-9
     source_regression: 1
     generator_gan: 1
     discriminator_gan: 0.5
