@@ -10,7 +10,7 @@ def sum_batch(val):
 
 def masked_l2_heatmap_loss(prediction, target, mask=None):
     #print(f"prediction {prediction.shape} target {target.shape}")
-    diff = l2_loss_l(prediction,target)
+    diff = l2_loss(prediction,target)
     diff = diff.view(prediction.shape[0],prediction.shape[1], -1).mean(2)
     #print(f"diff.shape  {diff.shape}")
 
