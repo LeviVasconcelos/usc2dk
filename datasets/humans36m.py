@@ -11,6 +11,7 @@ import torch
 import torch.utils.data as data
 import torchvision
 import torchvision.transforms.functional as TF
+from torchvision.transforms import ColorJitter, ToTensor, ToPILImage
 import h5py
 from PIL import Image
 
@@ -50,9 +51,9 @@ def batch_fn(data):
             }
     return out 
 
-def LoadHumansDataset(subjects, rgb, nImages, nViews, root_dir, kp_list,  batch_size=1, img_size=128, workers=16, process_batch=True):
+def LoadHumansDataset(subjects, rgb, nImages, nViews, root_dir, kp_list,  batch_size=1, img_size=128, workers=16, process_batch=True, color_jitter=None):
     h36m =  Humans36mDataset(nViews, root_dir, '', rgb, 
-                              nImages, subjects,  kp_list, -1, normalized=False, img_size=img_size)
+                              nImages, subjects,  kp_list, -1, normalized=False, img_size=img_size, color_jitter=color_jitter)
     if process_batch:
         return torch.utils.data.DataLoader(h36m, batch_size=batch_size, 
                                      shuffle=True, num_workers=workers, 
@@ -103,7 +104,7 @@ class Humans36mDataset(data.Dataset):
                     nPerSubject=2000, subjects = [0],
                     kp_list = [0, 1, 2, 3, 6, 7, 8, 13, 14, 17, 18, 19, 25, 26, 27],
                     meta_val=1, img_size=224, normalized=False, gt_only=False, 
-                    ref_interval=[3,30]):
+                    ref_interval=[3,30], color_jitter=None):
             self.ref_interval = ref_interval
             self.original_size = 224
             self.normalized = normalized
@@ -112,6 +113,12 @@ class Humans36mDataset(data.Dataset):
             self.rgb = rgb
             self.nViews = nViews if self.rgb else 1
             self.split = split
+            self.ColorJitter = None
+            if color_jitter is not None:
+                self.ColorJitter = ColorJitter(brightness = 0,
+                                               contrast=0,
+                                               saturation=0,
+                                               hue=0.5)
             self.kp_to_use = np.asarray(kp_list)
             self.K = len(self.kp_to_use)
             self.meta_val = meta_val
@@ -300,7 +307,10 @@ class Humans36mDataset(data.Dataset):
       def _load_image(self, idx, view=0):
             image_type = 'Views' if self.rgb else 'TOF'
             filename = self._get_ref(idx)[image_type][view]
-            return Image.open(filename)
+            img = Image.open(filename)
+            if self.ColorJitter is not None:
+                img = self.ColorJitter(img)
+            return img
       
       def _load_ref_idx(self, idx_):
             '''

@@ -6,6 +6,7 @@ import torch
 import torch.utils.data as data
 import torchvision
 import torchvision.transforms.functional as TF
+from torchvision.transforms import ColorJitter, ToTensor, ToPILImage
 import h5py
 from PIL import Image
 
@@ -32,23 +33,25 @@ def batch_mpii(data):
         for i in set(dcts[0]).intersection(*dcts[1:]):
             yield (i,) + tuple(d[i] for d in dcts)
 
-    (imgs, annot) = list(zip(*data))
+    (imgs, jit_imgs, annot) = list(zip(*data))
     def pack(key):
         stack = dict_zip(*annot)
         for x in stack:
             if x[0] == key:
                 return torch.from_numpy(np.stack(x[1:],0))
-    imgs = torch.from_numpy(np.stack(imgs, 0))
+    imgs = torch.from_numpy(np.stack(imgs, 0)).type(torch.FloatTensor)
+    jit_imgs = torch.from_numpy(np.stack(jit_imgs, 0)).type(torch.FloatTensor)
 
     return {
-            "imgs": imgs.type(torch.FloatTensor),
+            "imgs": imgs,
+            "jit_imgs": jit_imgs,
             "annots": pack('joints_3d').type(torch.FloatTensor),
             "kp_mask": pack('joints_3d_vis').unsqueeze(-1).type(torch.FloatTensor),
             }
 
-def LoadMpii(root_dir, train=True, batch_size=16, workers=12, nsamples=10000):
+def LoadMpii(root_dir, train=True, batch_size=16, workers=12, nsamples=10000, use_jitter=False):
     img_set = "train" if train else "valid"
-    dataset = MPIIDataset(root_dir, nsamples, img_set=img_set) 
+    dataset = MPIIDataset(root_dir, nsamples, img_set=img_set, use_jitter=use_jitter) 
     return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=workers, pin_memory=False, collate_fn=batch_mpii,drop_last=True)
    
     
@@ -58,7 +61,7 @@ class MPIIDataset(data.Dataset):
     frames/video_number/000x.png
     labels/video_number.mat
     """
-    def __init__(self, root_dir, nsamples,  img_set="train"):
+    def __init__(self, root_dir, nsamples,  img_set="train", use_jitter=False):
         self.root_dir = os.path.expanduser(root_dir)
         self.image_set = img_set
         self.samples = list()
@@ -66,6 +69,14 @@ class MPIIDataset(data.Dataset):
         self.frame_dir = os.path.join(self.root_dir, "frames")
         self.label_dir = os.path.join(self.root_dir, "labels")
         self.num_joints = 16
+        self.use_jitter = use_jitter
+        self.ColorJitter = None
+        if self.use_jitter:
+            self.ColorJitter = ColorJitter(brightness = 0,
+                                            contrast=0,
+                                            saturation=0,
+                                            hue=0.5)
+
 
         self.samples = self.make_dataset()
         self.samples = self.samples[:nsamples]
@@ -128,11 +139,12 @@ class MPIIDataset(data.Dataset):
         return samples 
 
     def _load_image(self, path):
-         return np.array(Image.open(path))
+         return Image.open(path)
 
     def _process_sample(self, img, annot):
         def shift_interval(a):
             return (2*a - 1)
+        img = np.array(img)
         p_img = img.transpose(2,0,1) / 255.
         annot['joints_3d'] = shift_interval(annot['joints_3d'] / (p_img.shape[1] - 1))
         #annot['joints_3d'] = annot['joints_3d']
@@ -144,10 +156,14 @@ class MPIIDataset(data.Dataset):
         sample = self.samples[idx]
         img_path = sample['image']
         img_path = img_path.split('/')
-        img_path[1] = 'data'
+        img_path[1] = 'data0'
         img_path = '/'.join(img_path)
         img, annot = self._process_sample(self._load_image(img_path), sample)
-        return img, annot
+        jit_img = img
+        if self.use_jitter:
+            jit_img = self.ColorJitter(self._load_image(img_path))
+            jit_img = np.array(jit_img).transpose(2, 0 ,1) / 255.
+        return img, jit_img, annot
 
     def __len__(self):
         return len(self.samples)

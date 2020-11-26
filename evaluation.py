@@ -32,6 +32,10 @@ def batch_PCK(predicted_kp_, source_gt_, dset='mpii', threshold_=0.5, mask=None)
     
     if 'mpii' in dset:
         dset = 'mpii'
+    if 'penn' in dset:
+        dset = 'penn'
+    if 'lsp' in dset:
+        dset = 'lsp'
     if 'h36m' in dset:
         dset = 'humans'
 
@@ -76,7 +80,8 @@ def evaluate(model, loader, dset='mpii', filter=None, device='cuda'):
     count = 0.
     with torch.no_grad():
         for batch in tqdm(loader):
-            out = model(batch['imgs'].to(device))
+            imgs = batch['imgs']
+            out = model(imgs.to(device))
             try:
                 mask = batch['kp_mask'].to(device)
             except:
@@ -89,7 +94,7 @@ def evaluate(model, loader, dset='mpii', filter=None, device='cuda'):
                 score = batch_MSE(out['value'], batch['annots'].to(device), mask=mask) 
             scores.append(score)
             pck_scores.append(pck_score)
-            count += batch['imgs'].shape[0]
+            count += imgs.shape[0]
     out = {
             'MSE':torch.Tensor(scores).sum()/count,
             'PCK':torch.Tensor(pck_scores).mean(),

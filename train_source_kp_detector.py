@@ -82,8 +82,8 @@ if __name__ == "__main__":
     dataset_source = ""
     dataset_eval = ""
     if opt.dataset == "h36m":
-        dataset_source = 'h36m_resized_crop_protocol2_train'
-        dataset_eval = 'h36m_resized_crop_protocol2_target'
+        dataset_source = 'h36m_train'
+        dataset_eval = 'h36m_test'
         loader = LoadHumansDataset(**config['datasets'][dataset_source])
         loader_tgt = LoadHumansDataset(**config['datasets'][dataset_eval])
     elif opt.dataset == "penn":

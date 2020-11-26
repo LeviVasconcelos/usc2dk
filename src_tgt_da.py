@@ -5,10 +5,13 @@ import numpy as np
 import torch
 import torch.nn as nn
 import numpy as np
+import torchvision.transforms as TF
+import matplotlib
+matplotlib.use('agg')
 from matplotlib import pyplot as plt
 from evaluation import evaluate
 from sync_batchnorm import DataParallelWithCallback 
-from modules.losses import masked_l2_heatmap_loss, l1_loss, masked_l2_loss 
+from modules.losses import masked_l2_heatmap_loss, l1_loss, masked_l2_loss, l2_loss 
 from modules.losses import generator_gan_loss, discriminator_gan_loss
 from modules.util import kp2gaussian2, gaussian2kp
 from modules.util import batch_image_rotation, batch_kp_rotation 
@@ -93,7 +96,7 @@ class KPDetectorTrainer(nn.Module):
         angle = (angle*180/np.pi).mean()
         return self.geo_f(angle,gt_angle)
 
-    def adapt(self, images, kp_map):
+    def adapt(self, images, kp_map, jittered_imgs=None):
         self.detector.set_domain_all(source=False)
         dict_out = self.detector(images)
         kps = dict_out['value'][:, kp_map]
@@ -102,9 +105,15 @@ class KPDetectorTrainer(nn.Module):
         geo_loss = 0
         geo_dict_out = None
         geo_images = None
+        jittered_loss = None
+        jit_kps = None
+        if jittered_imgs is not None:
+            jittered_out = self.detector(jittered_imgs)
+            jittered_loss = l2_loss(jittered_out['value'][:, kp_map], dict_out['value'][:, kp_map]).mean()
+            jit_kps = unnorm_kp(jittered_out['value'][:, kp_map])
         if self.geo_transform is not None:
-            range_angle = min(self.angle_range ,int(self.angle_incr_factor * (self.angle_range* self.epoch_ratio)))
-            angle = random.randint(-1*range_angle,range_angle)
+            #range_angle = min(self.angle_range ,int(self.angle_incr_factor * (self.angle_range* self.epoch_ratio)))
+            angle = random.randint(-1*self.angle_range,self.angle_range)
             geo_images = self.geo_transform(images, angle).detach()
             geo_dict_out = self.detector(geo_images)
             geo_heatmaps = geo_dict_out['heatmaps'][:, kp_map]
@@ -125,6 +134,8 @@ class KPDetectorTrainer(nn.Module):
         return {"keypoints": kps,
                 "heatmaps": heatmaps,
                 "geo_loss": geo_loss,
+                "jit_loss": jittered_loss,
+                "jit_kps": jit_kps,
                 "geo_out": geo_dict_out,
                 "geo_images": geo_images,
                 "generator_loss": generator_loss,
@@ -218,13 +229,11 @@ def train_kpdetector(model_kp_detector,
         geo_transform = batch_image_rotation
     kp_detector = KPDetectorTrainer(model_kp_detector, train_params, 
                                     discriminator=model_discriminator,
-                                    geo_transform=geo_transform, angle_equivariance=train_params['angle_equivariance'])
+                                    geo_transform=geo_transform)
     if train_params['use_gan']:
         discriminator = DiscriminatorTrainer(model_discriminator, train_params)
     # number of unrolled steps to do, if 0 no unrolling, usually 5 or 10
     unrolled_steps = train_params["unrolled_steps"] 
-    print(f"unrolled_steps: {unrolled_steps}, rotation: {train_params['use_rotation']}, angle_equivariance {train_params['angle_equivariance']}")
-
     k = 0
     if train_params['test'] == True:
         results = evaluate(model_kp_detector, loader_tgt, dset=train_params['dataset'])
@@ -235,6 +244,7 @@ def train_kpdetector(model_kp_detector,
     heatmap_size = (kp_detector.heatmap_res, kp_detector.heatmap_res)
     loader_src_train, loader_src_test, loader_tgt = loaders
     iterator_source = iter(loader_src_train)
+    print('********* epochs: %d ********' % train_params['num_epochs'])
     for epoch in range(logger.epoch, train_params['num_epochs']):
         kp_detector.epoch_ratio = epoch/train_params["num_epochs"]
         kp_detector.detector.set_domain_all(source=False)
@@ -251,7 +261,10 @@ def train_kpdetector(model_kp_detector,
         logger.add_scalar('PCK src test', results_src_test['PCK'], epoch)
    
         for i, tgt_batch  in enumerate(tqdm(loader_tgt)):
-            tgt_images = tgt_batch['imgs'].cuda()
+            tgt_images = tgt_batch['imgs']
+            tgt_jit_imgs = tgt_batch['jit_imgs']
+            tgt_images = tgt_images.cuda()
+            tgt_jit_imgs = tgt_jit_imgs.cuda()
             tgt_annots = tgt_batch['annots'].cuda()
             try:
                 src_batch = next(iterator_source)
@@ -274,7 +287,10 @@ def train_kpdetector(model_kp_detector,
                     kp_detector.detector.set_domain_all(source=True)
 
             kp_detector_src_out = kp_detector(src_images, src_annots, mask)
-            kp_detector_tgt_out = kp_detector.adapt(tgt_images, kp_map)
+            if train_params['use_jitter']:
+                kp_detector_tgt_out = kp_detector.adapt(tgt_images, kp_map, tgt_jit_imgs)
+            else:
+                kp_detector_tgt_out = kp_detector.adapt(tgt_images, kp_map)
 
             src_loss = kp_detector_src_out['src_loss'].mean() 
             geo_loss_value = 0
@@ -291,14 +307,21 @@ def train_kpdetector(model_kp_detector,
                 gen_loss = kp_detector_tgt_out['generator_loss']
                 gen_loss_value = gen_loss.item()
 
-            loss = geo_loss + src_loss + gen_loss
+            jit_loss = 0
+            jit_loss_value = 0
+            if kp_detector_tgt_out['jit_loss'] is not None:
+                jit_loss = kp_detector_tgt_out['jit_loss']
+                jit_loss_value = jit_loss.item()
+
+
+            loss = geo_loss + src_loss + gen_loss + jit_loss
             loss.backward()
 
             optimizer_kp_detector.step()
             optimizer_kp_detector.zero_grad()
 
             # reload discriminator model
-            if unrolled_steps > 0:
+            if train_params['use_gan'] and unrolled_steps > 0:
                 discriminator.load_state_dict(backup)
 
             disc_loss_value = 0
@@ -325,6 +348,9 @@ def train_kpdetector(model_kp_detector,
                                logger.iterations)
             logger.add_scalar('gen loss',
                                gen_loss_value,
+                               logger.iterations)
+            logger.add_scalar('jitter loss',
+                               jit_loss_value,
                                logger.iterations)
             
             if i in log_params['log_imgs']:
@@ -365,12 +391,20 @@ def train_kpdetector(model_kp_detector,
                 concat_hm_gt = np.concatenate((
                        tensor_to_image(heatmap_0, True),
                        tensor_to_image(heatmap_1, True)), axis= 2)
+                jit_kps = tgt_annots[k] if kp_detector_tgt_out['jit_kps'] is None else kp_detector_tgt_out['jit_kps'][k]
+                concat_jit = np.concatenate((
+                     draw_kp(tensor_to_image(tgt_images[k]), 
+                             kp_detector_tgt_out['keypoints'][k], color='red'),
+                     draw_kp(tensor_to_image(tgt_jit_imgs[k]), 
+                             jit_kps, color='red')),
+                             axis=2)
                 
                 logger.add_image('src train', concat_img_src, logger.iterations)
                 logger.add_image('tgt train', concat_img_tgt, logger.iterations)
                 logger.add_image('src_heatmap', concat_hm_src_net, logger.iterations)
                 logger.add_image('tgt_heatmap', concat_hm_tgt_net, logger.iterations)
                 logger.add_image('gt heatmap', concat_hm_gt, logger.iterations)
+                logger.add_image('jit images', concat_jit, logger.iterations)
                 k += 1
                 k = k % len(log_params['log_imgs']) 
             logger.step_it()

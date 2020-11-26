@@ -28,7 +28,7 @@ if __name__ == "__main__":
     parser.add_argument("--src_dataset", default="h36m", type=str, help="which dataset to use for training. [h36m | penn]")
     parser.add_argument("--tgt_dataset", default="mpii", type=str, help="which dataset to use for target")
     parser.add_argument("--test", action="store_true", help='test instead of train model')
-    parser.add_argument("--epochs", default=500, type=int, help="nubmer of epochs to train")
+    parser.add_argument("--epochs", default=50, type=int, help="nubmer of epochs to train")
     opt = parser.parse_args()
 
     with open(opt.config) as f:

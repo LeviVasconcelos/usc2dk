@@ -11,8 +11,9 @@ datasets:
     img_size: 128
     workers: 12 
     process_batch: True
-    root_dir: '/data/levi/workspace/h36m-fetch/video_processed_resized_crop' 
+    root_dir: '/data0/levi/dataset/h36m_resized_crop' 
     kp_list: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+    color_jitter: True
    h36m_test:
     subjects: [5,6]
     rgb: True
@@ -22,15 +23,16 @@ datasets:
     img_size: 128
     workers: 12 
     process_batch: True
-    root_dir: '/data/levi/workspace/h36m-fetch/video_processed_resized_crop' 
+    root_dir: '/data0/levi/dataset/h36m_resized_crop' 
     kp_list: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
    mpii_train:
-    root_dir: '/data/levi/dataset/mpii_128'
+    root_dir: '/data0/levi/dataset/mpii_128'
     train: True 
     batch_size: 16
     workers: 12 
+    use_jitter: True
    mpii_test:
-    root_dir: '/data/levi/dataset/mpii_128_eval'
+    root_dir: '/data0/levi/dataset/mpii_128_eval'
     train: False 
     batch_size: 16
     workers: 12 
@@ -42,18 +44,20 @@ train_params:
   src_test: 'h36m_test'
   tgt_train: 'mpii_train'
   tgt_test: 'mpii_test'
-  num_epochs: 500
+  num_epochs: 40
   epoch_milestones: [300, 400]
   lr: 2.0e-4
   batch_size: 32
   heatmap_var: 0.15
   test: False
-  use_rotation: False
+  use_rotation: True
+  angle_equivariance: False
+  use_jitter: True
   use_gan: True
   unrolled_steps : 10
   source_loss: 'heatmap'
   loss_weights:
-    geometric: 0.001
+    geometric: 1.0e-9
     source_regression: 1
     generator_gan: 1
     discriminator_gan: 0.5
