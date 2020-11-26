@@ -9,15 +9,23 @@ def sum_batch(val):
     return sum_b
 
 def masked_l2_heatmap_loss(prediction, target, mask=None):
-    diff = l2_loss(prediction,target)
+    #print(f"prediction {prediction.shape} target {target.shape}")
+    diff = l2_loss_l(prediction,target)
+    diff = diff.view(prediction.shape[0],prediction.shape[1], -1).mean(2)
+    #print(f"diff.shape  {diff.shape}")
+
     if mask is not None:
         if (mask != mask).sum() > 0:
             print('NaN on mask!!')
             raise ValueError
         img_mask = torch.ones(diff.shape)
-        #print(f"mask.shaep {mask.shape}")
-        diff = diff * mask.unsqueeze(-1)
-        division = mask.sum(1).unsqueeze(-1)
+        # print(f"prediction.shape {prediction.shape}")
+        # print(f"img_mask.shape {img_mask.shape}")
+        # print(f"mask.shape {mask.shape}")
+        # print(f"diff.shape  {diff.shape}")
+        diff = diff * mask.squeeze(-1)
+        #print(f"diff.shape  {diff.shape}")
+        division = mask.sum(1) # .unsqueeze(-1)#.unsqueeze(-1)
         if (division == 0).sum() > 0:
             print('division by Zero!')
             raise ValueError
@@ -47,7 +55,7 @@ def masked_l2_loss(prediction, target, mask=None):
 def l2_loss(prediction, target, weight=1):
     if weight == 0:
         return 0
-    return weight * mean_batch(torch.pow(prediction - target,2))
+    return weight * torch.pow(prediction  - target,2)
 
 def l1_loss(prediction, target, weight=1):
     if weight == 0:
