@@ -98,7 +98,7 @@ if __name__ == "__main__":
         loader_tgt = LoadLsp(**config['datasets'][dataset_eval])
     elif opt.dataset == 'mpii':
         dataset_source = 'mpii_train'
-        dataset_eval = 'mpii_eval'
+        dataset_eval = 'mpii_test'
         loader = LoadMpii(**config['datasets'][dataset_source])
         loader_tgt = LoadMpii(**config['datasets'][dataset_eval]) 
     tgt_batch = next(iter(loader_tgt))

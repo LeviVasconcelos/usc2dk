@@ -163,6 +163,7 @@ class MPIIDataset(data.Dataset):
         if self.use_jitter:
             jit_img = self.ColorJitter(self._load_image(img_path))
             jit_img = np.array(jit_img).transpose(2, 0 ,1) / 255.
+            img = jit_img
         return img, jit_img, annot
 
     def __len__(self):
