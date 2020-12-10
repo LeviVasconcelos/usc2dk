@@ -17,7 +17,7 @@ from datasets.lsp import LoadLsp
 from datasets.mpii_loader import LoadMpii
 from datasets.unaligned_loader import LoadUnalignedH36m 
 from datasets.utils import DatasetLoaders, MapH36mTo
-from src_tgt_da import train_kpdetector
+from disciminator_train import train_discriminator
 
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -27,12 +27,9 @@ if __name__ == "__main__":
     parser.add_argument("--device_ids", default="0", 
                          type=lambda x: list(map(int, x.split(','))), 
                          help="Names of the devices comma separated.")
-    parser.add_argument("--src_dataset", default="h36m", type=str, help="which dataset to use for training. [h36m | penn]")
-    parser.add_argument("--tgt_dataset", default="mpii", type=str, help="which dataset to use for target")
+    parser.add_argument("--src_dataset", default="mpii", type=str, help="which dataset to use for training. [h36m | penn]")
+    parser.add_argument("--tgt_dataset", default="penn", type=str, help="which dataset to use for target")
     parser.add_argument("--src_model", default=None,  help="pretrained model on source")
-    parser.add_argument("--src_discriminator", default=None,  help="discriminator pretrained")
-    parser.add_argument("--pseudo_label", default="non_use", help="decide if use or not pseudo labels")
-    parser.add_argument("--test", action="store_true", help='test instead of train model')
     parser.add_argument("--epochs", default=500, type=int, help="nubmer of epochs to train")
     opt = parser.parse_args()
 
@@ -51,30 +48,20 @@ if __name__ == "__main__":
         copy(opt.config, log_dir)
 
     logger = Logger(log_dir, save_frequency=25)
+
     config['train_params']['num_epochs'] = opt.epochs
-    reverse=False
     if opt.src_dataset == "penn":
         config['model_params']['kp_detector_params']['num_kp'] = 13
         config['model_params']['discriminator_heatmap_params']['num_channels'] = 13
-        reverse=True 
-    elif opt.src_dataset == "lsp":
-        config['model_params']['kp_detector_params']['num_kp'] = 14
     elif opt.src_dataset == "mpii":
         config['model_params']['kp_detector_params']['num_kp'] = 16
         config['model_params']['discriminator_heatmap_params']['num_channels'] = 16
 
-    elif opt.src_dataset == "h36m":
-        config['model_params']['kp_detector_params']['num_kp'] = 32
-
     train_params = config['train_params']
     kp_map = None
     model_kp_detector = KPDetector(**config['model_params']['kp_detector_params']) 
-    #model_kp_detector.convert_bn_to_dial(model_kp_detector, device=opt.device_ids[0])
-
     model_kp_detector.to(opt.device_ids[0]) 
-    kp_state_dict = torch.load(opt.src_model)
-
-    adapt_pretrained = False
+    
     if opt.src_model is not None:
         try:
             adapt_pretrained = True
@@ -90,37 +77,12 @@ if __name__ == "__main__":
             print('failed to load model weights')
             exit(1)
 
-    label_generator = None
-    if opt.pseudo_label=="use":
-        label_generator = KPDetector(**config['model_params']['kp_detector_params']) 
-        #label_generator.convert_bn_to_dial(label_generator, device= opt.device_ids[0])
-
-        label_generator.to(opt.device_ids[0]) 
-        label_state_dict = torch.load(opt.src_model)
-        try:
-            print(f"loading {opt.src_model}")
-            label_state_dict = torch.load(opt.src_model)
-            print('Label Generator model loaded: %s' % opt.src_model)
-        except:
-            print('Failed to read model %s' % opt.src_model)
-            exit(1)
-        try:
-            label_generator.load_state_dict(label_state_dict['model_kp_detector'])
-        except:
-            print('failed to load model weights')
-            exit(1)
-
     #label_generator.convert_bn_to_dial(label_generator, device= opt.device_ids[0])
     #label_generator = label_generator.cuda()#label_generator.to(opt.device_ids[0]) 
     
-    model_discriminator= None
-    if train_params['use_gan']:
-        config['model_params']['discriminator_heatmap_params']['num_channels'] = 13
-        model_discriminator = MultiScaleDiscriminator(config['model_params']['discriminator_heatmap_params'], scales=[1.])
-        model_discriminator.to(opt.device_ids[0])
-        kp_state_dict = torch.load(opt.src_discriminator)
-        model_discriminator.load_state_dict(kp_state_dict['model_kp_discriminator'])
-
+    model_discriminator = MultiScaleDiscriminator(config['model_params']['discriminator_heatmap_params'], scales=[1.])
+    model_discriminator.to(opt.device_ids[0])
+    
     ##### Dataset loading
     src_dset_loader = DatasetLoaders[opt.src_dataset]
     tgt_dset_loader = DatasetLoaders[opt.tgt_dataset]
@@ -135,13 +97,11 @@ if __name__ == "__main__":
     MPII_TO_PENN=np.array([9,13,12,14,11,15,10,3,2,4,1,5,0])
     kp_map = MPII_TO_PENN
 
-    train_kpdetector(model_kp_detector,
-                       label_generator,
+    train_discriminator(model_kp_detector,
+                       model_discriminator,
                        loaders,
                        train_params,
                        opt.checkpoint,
                        logger, opt.device_ids, 
-                       model_discriminator=model_discriminator,
-                       kp_map=kp_map, 
-                       adapt_pretrained= adapt_pretrained,reverse=reverse)
+                       kp_map=kp_map)
  

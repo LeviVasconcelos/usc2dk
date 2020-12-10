@@ -7,6 +7,7 @@ import math
 from tqdm import tqdm
 import random
 
+from modules.losses import masked_l2_heatmap_loss,mean_batch
 import numpy as np
 from sync_batchnorm import SynchronizedBatchNorm3d as BatchNorm3d
 from sync_batchnorm import SynchronizedBatchNorm2d as BatchNorm2d
@@ -602,10 +603,11 @@ def gaussian2kp_v2(heatmap):
 
     return kp
 
-def extract_variance_percentile(model, loader, dset='mpii', filter=None, device='cuda', num_augmentation=5, range_angle=45, percentile = 5):
+def extract_variance_percentile(model, loader,  dset='mpii', filter=None, device='cuda', num_augmentation=5, range_angle=45, percentile = 5, heatmap_size=(122,122), heatmap_var=0.15):
     ### extract the variance and return the percentile values specified 
     model.eval()
     variance =  torch.Tensor([]).to(device)
+    losses_total = torch.Tensor([]).to(device)
     with torch.no_grad():
         for batch in tqdm(loader):
             try:
@@ -623,22 +625,51 @@ def extract_variance_percentile(model, loader, dset='mpii', filter=None, device=
                 rot_img = rot_img.to(device)
                 out = model(rot_img)
                 if filter is not None:
-                    heatmaps = torch.cat((heatmaps, batch_image_rotation(out["heatmaps"], -angle).unsqueeze(1)), axis=1 )
+                    heatmaps = torch.cat((heatmaps, batch_image_rotation(out["heatmaps"], -angle).unsqueeze(1)), axis=1)
+                    heatmaps = heatmaps.sum(axis=1).unsqueeze(1) #torch.cat((heatmaps, batch_image_rotation(out["heatmaps"], -angle).unsqueeze(1)), axis=1)
+
+                    #heatmaps = torch.cat((heatmaps, batch_image_rotation(out["heatmaps"], -angle).unsqueeze(1)), axis=1 )
                 else:
-                    heatmaps = torch.cat((heatmaps, batch_image_rotation(out["heatmaps"], -angle).unsqueeze(1)), axis=1 )
+                    heatmaps = torch.cat((heatmaps, batch_image_rotation(out["heatmaps"], -angle).unsqueeze(1)), axis=1)
+                    heatmaps = heatmaps.sum(axis=1).unsqueeze(1) #torch.cat((heatmaps, batch_image_rotation(out["heatmaps"], -angle).unsqueeze(1)), axis=1)
+
+                    #heatmaps = torch.cat((heatmaps, batch_image_rotation(out["heatmaps"], -angle).unsqueeze(1)), axis=1 )
 
             # [batch, n_aug, nkp, w_hm, h_hm]            
             hm  = heatmaps.sum(axis=1)/heatmaps.shape[1] # [batch, nkp, w_hm, h_hm]
-            
+
+            gt_heatmaps = kp2gaussian2(batch['annots'].to(device), heatmap_size,heatmap_var).detach()
+            tgt_loss = masked_l2_heatmap_loss(hm[:,filter], 
+                    gt_heatmaps, mask)
+            losses_total = torch.cat((losses_total, tgt_loss), 0)
+
             kps = gaussian2kp_v2(hm)
             out['value'] = kps["mean"] 
             if filter is not None:
                 out["var"] = kps["var"][:,filter]
             else:
                 out["var"] = kps["var"]
-
             variance = torch.cat((variance, out["var"].mean(1)), 0)
-           
-    
 
-    return  np.percentile(variance.cpu(),percentile , axis=0), variance
+    del rot_img
+    del hm
+    del gt_heatmaps
+    torch.cuda.empty_cache()     
+
+    return  np.percentile(variance.cpu(),percentile , axis=0), variance.cpu(), np.percentile(losses_total.cpu(),percentile , axis=0), losses_total.cpu()
+
+def discriminator_percentile(model, loader, discriminator, device="cuda",filter=None,percentile = 5):
+    model.eval()
+    discriminator.eval()
+    probabilities = torch.Tensor([]).to(device)
+    with torch.no_grad():
+        for batch in tqdm(loader):
+            out = model(batch['imgs'].to(device))     
+            maps = discriminator(out["heatmaps"][:,filter].detach()) # 1 real 0 fake 
+            batch_prob = mean_batch(maps[0])
+            #print(f"batch_prob {batch_prob.shape} ,  probabilities {probabilities.shape}")
+            probabilities =  torch.cat((probabilities, batch_prob), axis=0)
+    model.train()
+
+    return np.percentile(probabilities.cpu(),percentile, axis=0)
+

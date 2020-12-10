@@ -8,6 +8,55 @@ from modules.alex_hourglass import Hourglass, HourglassVerbose, make_coordinate_
 from sync_batchnorm import SynchronizedBatchNorm2d as BatchNorm2d
 from sync_batchnorm import SynchronizedBatchNorm2d
 
+class KPDetectorConfidence(nn.Module):
+    def __init__(self, pretrained_model, num_kp, pad=0, scale_factor=1):
+
+        super(KPDetectorConfidence, self).__init__()
+        print(f"n_kp : {num_kp}")
+        self.kp_predictor = pretrained_model
+        self.heatmap_res = 122
+        self.temperature = self.kp_predictor.temperature
+        self.scale_factor = self.kp_predictor.scale_factor
+
+        self.sigmoid = torch.nn.Sigmoid()
+        self.confidence_conv = nn.Conv2d(in_channels=num_kp, out_channels=1, kernel_size=(2, 2), padding=pad)
+        self.confidence_lin = nn.Linear(121*121, 1)
+
+
+    def gaussian2kp(self, heatmap):
+        """
+        Extract the mean and the variance from a heatmap
+        """
+        shape = heatmap.shape
+        heatmap = heatmap.unsqueeze(-1)
+        grid = make_coordinate_grid(shape[2:], heatmap.type()).unsqueeze_(0).unsqueeze_(0).to(heatmap.device)
+        value = (heatmap * grid).sum(dim=(2, 3))
+        kp = {'value': value}
+
+        return kp
+
+
+    def forward(self, x):
+        with torch.no_grad():
+            if self.scale_factor != 1:
+                x = self.down(x)
+
+            feature_map = self.kp_predictor.predictor(x)
+            prediction = self.kp_predictor.kp(feature_map)
+
+            final_shape = prediction.shape
+            heatmap = prediction.view(final_shape[0], final_shape[1], -1)
+            heatmap = F.softmax(heatmap / self.temperature, dim=2)
+            heatmap = heatmap.view(*final_shape)
+
+            out = self.gaussian2kp(heatmap)
+            out['heatmaps'] = heatmap
+
+        out["confidence"] = self.confidence_lin(torch.flatten(self.confidence_conv(prediction), start_dim=1))
+
+        
+        return out
+
 class KPDetector(nn.Module):
     """
     Detecting a keypoints. Return keypoint position and jacobian near each keypoint.
@@ -24,6 +73,8 @@ class KPDetector(nn.Module):
 
         self.kp = nn.Conv2d(in_channels=self.predictor.out_filters, out_channels=num_kp, kernel_size=(7, 7),
                             padding=pad)
+
+        
         self.index=0
         self.heatmap_res = 122
 
@@ -60,6 +111,9 @@ class KPDetector(nn.Module):
         feature_map = self.predictor(x)
         prediction = self.kp(feature_map)
 
+        #print(f"prediction {prediction.shape}")
+        #print(f"prediction_flatten {torch.flatten(prediction, start_dim=1).shape}")
+
         final_shape = prediction.shape
         heatmap = prediction.view(final_shape[0], final_shape[1], -1)
         heatmap = F.softmax(heatmap / self.temperature, dim=2)
@@ -67,6 +121,9 @@ class KPDetector(nn.Module):
 
         out = self.gaussian2kp(heatmap)
         out['heatmaps'] = heatmap
+
+        #out['heatmaps'] = F.sigmoid(prediction)
+        #out["confidence"] =  self.confidence_lin(torch.flatten(self.confidence_conv(prediction), start_dim=1))
 
         if self.jacobian is not None:
             jacobian_map = self.jacobian(feature_map)
@@ -98,8 +155,8 @@ class KPDetector(nn.Module):
                 mod = DomainAdaptationLayer(child.running_mean.shape[0]).to(device)
                 #print(mod.weight.mean(),mod.bias.mean(),mod.bn_source.running_mean.mean(),mod.bn_source.running_var.mean(),mod.bn_target.running_mean.mean(),mod.bn_target.running_var.mean())
                 # setattr(model, child_name, DomainAdaptationLayer(child.running_mean.shape[0]))
-                mod.weight = w.view(1,-1,1,1)
-                mod.bias= b.view(1,-1,1,1)
+                mod.weight = w.view(1,-1,1,1).to(device)
+                mod.bias= b.view(1,-1,1,1).to(device)
                 mod.bn_source.running_mean = m
                 mod.bn_source.running_var = v
                 mod.bn_target.running_mean = m
