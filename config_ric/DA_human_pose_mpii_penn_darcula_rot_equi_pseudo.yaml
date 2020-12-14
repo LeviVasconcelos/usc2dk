@@ -1,0 +1,81 @@
+datasets:
+  loader:
+    workers: 24
+    batch_size: 4
+  mpii_train:
+    root_dir: '/data0/levi/dataset/mpii_128'
+    train: True 
+    batch_size: 16
+    workers: 12 
+  mpii_test:
+    root_dir: '/data0/levi/dataset/mpii_128_eval'
+    train: False 
+    batch_size: 16
+    workers: 12 
+    nsamples: 100000
+  penn_train:
+    root_dir: '/data0/levi/dataset/PennAction/PennAction_128'
+    train: True
+    batch_size: 16
+    workers: 12 
+    use_jitter: False
+  penn_test:
+    root_dir: '/data0/levi/dataset/PennAction/PennAction_128'
+    train: False 
+    batch_size: 16
+    workers: 12 
+    use_jitter: False
+
+
+
+train_params:
+  src_train: 'mpii_train'
+  src_test: 'mpii_test'
+  tgt_train: 'penn_train'
+  tgt_test: 'penn_test'
+  num_epochs: 500
+  epoch_milestones: [300, 400]
+  lr: 2.0e-4
+  batch_size: 32
+  heatmap_var: 0.15
+  test: False
+  num_augmentation: 1
+  use_rotation: True
+  use_discriminator: True 
+  percentile: 2
+  regularize: True
+  semi_supervise: False
+  source_loss: 'heatmap'
+  loss_weights:
+    geometric: 2
+    pseudo_loss: 0.0001
+    source_regression: 1
+  log_params:
+    log_freq_iter: 200
+    cpk_freq_epoch: 50
+    log_imgs: [50, 100, 200, 300]
+    eval_frequency: 200
+  betas: !!python/tuple [0.5, 0.999]
+
+model_params:
+  kp_detector_params:
+    temperature: 0.1
+    block_expansion: 32
+    max_features: 1024
+    num_blocks: 5
+    scale_factor: 1 
+    num_kp: 16 #32 
+    num_channels: 3
+  discriminator_heatmap_params:
+    num_channels: 16 
+    num_kp: 15 #15
+    kp_variance: 0.01
+    block_expansion: 32
+    num_blocks: 4
+    max_features: 512
+    spectral_norm: True 
+ 
+
+
+
+
