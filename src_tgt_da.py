@@ -31,6 +31,7 @@ class KPDetectorTrainer(nn.Module):
         super(KPDetectorTrainer, self).__init__()
         self.detector = kp_detector
         self.discriminator = discriminator
+        #self.detector.convert_bn_to_dial(self.detector, device=next(kp_detector.parameters()).device)
         self.heatmap_res = self.detector.heatmap_res
         self.geo_transform = geo_transform
         self.train_params = train_params
@@ -226,8 +227,7 @@ def train_kpdetector(model_kp_detector,
     heatmap_var = train_params['heatmap_var']
     heatmap_size = (kp_detector.heatmap_res, kp_detector.heatmap_res)
 
-    loader_src_train, loader_src_test, loader_tgt_train, loader_tgt_test = loaders
-    iterator_source = iter(loader_src_train)
+    loader_tgt_train, loader_tgt_test = loaders
     device_ids =device_ids[0]
 
     if train_params['use_discriminator']:
@@ -238,7 +238,7 @@ def train_kpdetector(model_kp_detector,
     for epoch in range(logger.epoch, train_params['num_epochs']):
 
         kp_detector.epoch_ratio = epoch/train_params["num_epochs"]
-
+        #kp_detector.detector.set_domain_all(source=False)
         results_tgt_test = evaluate(kp_detector.detector, loader_tgt_test, dset=train_params['tgt_train'], filter=kp_map, device=device_ids, reverse=reverse)
         results_tgt_train = evaluate(kp_detector.detector, loader_tgt_train, dset=train_params['tgt_train'], filter=kp_map, device=device_ids, reverse=reverse)
 

@@ -8,6 +8,7 @@ import torchvision
 import torchvision.transforms.functional as TF
 import h5py
 from PIL import Image
+from torchvision.transforms import ColorJitter, ToPILImage
 
 from tqdm import tqdm
 import pickle
@@ -23,20 +24,21 @@ def batch_penn(data):
         if (x.min() < 0):
             print('Error, x < 0', x.min())
         return (2*x - 1)
-
-    (imgs, kps, vis) = list(zip(*data))
+    (imgs, kps, vis ,jit_imgs) = list(zip(*data))
     imgs = torch.from_numpy(np.stack(imgs, 0)).permute(0,3,1,2)
     kps = torch.from_numpy(np.stack(kps, 0)) / (imgs.shape[2]-1)
     vis = torch.from_numpy(np.stack(vis, 0))
+    jit_imgs = torch.from_numpy(np.stack(jit_imgs, 0)).type(torch.FloatTensor)
 
     return {
             "imgs": imgs.type(torch.FloatTensor) / 255.,
+            "jit_imgs": jit_imgs,
             "annots": shift_to_interval(kps, vis).type(torch.FloatTensor),
             "kp_mask": vis.unsqueeze(-1).type(torch.FloatTensor),
             }
 
-def LoadPennAction(root_dir, train=True, batch_size=16, workers=12):
-   dataset = PennAction(root_dir, train) 
+def LoadPennAction(root_dir, train=True, batch_size=16, workers=12,use_jitter=False):
+   dataset = PennAction(root_dir, train,use_jitter=use_jitter) 
    return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=workers, pin_memory=False, collate_fn=batch_penn,drop_last=True)
    
     
@@ -46,17 +48,24 @@ class PennAction(data.Dataset):
     frames/video_number/000x.png
     labels/video_number.mat
     """
-    def __init__(self, root_dir, train=True):
+    def __init__(self, root_dir, train=True, use_jitter=False):
         self.root_dir = os.path.expanduser(root_dir)
         self.train = 1 if train else -1
         self.samples = list()
         self.labels = dict()
         self.frame_dir = os.path.join(self.root_dir, "frames")
         self.label_dir = os.path.join(self.root_dir, "labels")
-        self.max_samples = 400000
+        self.max_samples = 400000 #22000  #12000 
         self.load_annotations()
         self.make_dataset()
         self.samples = self.samples[:self.max_samples]
+        self.use_jitter = use_jitter
+        self.ColorJitter = None
+        if self.use_jitter:
+            self.ColorJitter = ColorJitter(brightness = 0,
+                                            contrast=0,
+                                            saturation=0,
+                                            hue=0.5)
         print('Loading PennAction: %s split: %s' % (self.root_dir, ('train' if train else 'test')))
 
 
@@ -103,11 +112,19 @@ class PennAction(data.Dataset):
                 self.labels[frame_number] = scipy.io.loadmat(os.path.join(root, fname))
 
     def _load_image(self, path):
-        return np.array(Image.open(path))
+        return Image.open(path)
+
+
 
     def __getitem__(self, idx):
         (img_path, (annot, vis)) = self.samples[idx]
-        return self._load_image(img_path), annot, vis
+        img = self._load_image(img_path)
+        jit_img = np.array(img)
+        if self.use_jitter:
+            jit_img = self.ColorJitter(img)
+            jit_img = np.array(jit_img).transpose(2, 0 ,1) / 255.
+            
+        return np.array(img), annot, vis, jit_img
 
     def __len__(self):
         return len(self.samples)

@@ -658,18 +658,16 @@ def extract_variance_percentile(model, loader,  dset='mpii', filter=None, device
 
     return  np.percentile(variance.cpu(),percentile , axis=0), variance.cpu(), np.percentile(losses_total.cpu(),percentile , axis=0), losses_total.cpu()
 
-def discriminator_percentile(model, loader, discriminator, device="cuda",filter=None,percentile = 5):
+def discriminator_percentile(model, loader, discriminator, device="cuda",filter=None, percentile=5):
     model.eval()
     discriminator.eval()
     probabilities = torch.Tensor([]).to(device)
     with torch.no_grad():
         for batch in tqdm(loader):
             out = model(batch['imgs'].to(device))     
-            maps = discriminator(out["heatmaps"][:,filter].detach()) # 1 real 0 fake 
+            maps = discriminator(out["heatmaps"].detach())  
             batch_prob = mean_batch(maps[0])
-            #print(f"batch_prob {batch_prob.shape} ,  probabilities {probabilities.shape}")
             probabilities =  torch.cat((probabilities, batch_prob), axis=0)
     model.train()
-
     return np.percentile(probabilities.cpu(),percentile, axis=0)
 

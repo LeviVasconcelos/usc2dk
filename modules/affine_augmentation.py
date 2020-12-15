@@ -179,7 +179,7 @@ def inverse_affine(img, ret, inverse=True):
     
     return img, ret 
     
-def batch_affine(batch, inverse_aff, inverse=True):
+def batch_affine(batch, inverse_aff, inverse=True, device="cuda"):
     batch_inv_aff = torch.Tensor([])
     for i in range(batch.shape[0]):
         kps_heatmap = torch.tensor([])
@@ -188,7 +188,7 @@ def batch_affine(batch, inverse_aff, inverse=True):
             mg = torchvision.transforms.ToTensor()(mg)[0].unsqueeze(0)
             kps_heatmap = torch.cat((kps_heatmap,mg),0)
         batch_inv_aff = torch.cat((batch_inv_aff,kps_heatmap.unsqueeze(0)),0)
-    return batch_inv_aff.cuda()
+    return batch_inv_aff.to(batch.device)
     
 def _setup_size(size, error_msg):
     if isinstance(size, numbers.Number):

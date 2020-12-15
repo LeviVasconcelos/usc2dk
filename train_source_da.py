@@ -59,6 +59,9 @@ if __name__ == "__main__":
     elif opt.src_dataset == "mpii":
         config['model_params']['kp_detector_params']['num_kp'] = 16
         config['model_params']['discriminator_heatmap_params']['num_channels'] = 16
+    elif opt.src_dataset == "h36m":
+        config['model_params']['kp_detector_params']['num_kp'] = 32
+        config['model_params']['discriminator_heatmap_params']['num_channels'] = 32    
 
     train_params = config['train_params']
     kp_map = None
@@ -106,17 +109,18 @@ if __name__ == "__main__":
         model_discriminator.load_state_dict(kp_state_dict['model_kp_discriminator'])
 
     ##### Dataset loading
-    src_dset_loader = DatasetLoaders[opt.src_dataset]
     tgt_dset_loader = DatasetLoaders[opt.tgt_dataset]
     cfg_dset = config['datasets']
-    loader_src_train = src_dset_loader(**cfg_dset[train_params['src_train']])
-    loader_src_test = src_dset_loader(**cfg_dset[train_params['src_test']])
     loader_tgt_train = tgt_dset_loader(**cfg_dset[train_params['tgt_train']])
     loader_tgt_test = tgt_dset_loader(**cfg_dset[train_params['tgt_test']])
-    loaders = [loader_src_train, loader_src_test, loader_tgt_train, loader_tgt_test]
+    loaders = [loader_tgt_train, loader_tgt_test]
 
-    MPII_TO_PENN=np.array([9,13,12,14,11,15,10,3,2,4,1,5,0])
-    kp_map = MPII_TO_PENN
+
+    if opt.src_dataset == "h36m":
+        kp_map = MapH36mTo[opt.tgt_dataset]
+    else:
+        MPII_TO_PENN=np.array([9,13,12,14,11,15,10,3,2,4,1,5,0])
+        kp_map = MPII_TO_PENN
 
     train_kpdetector(model_kp_detector,
                        label_generator,
